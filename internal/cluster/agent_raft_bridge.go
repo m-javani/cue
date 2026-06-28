@@ -312,9 +312,9 @@ func (a *ClusterAgent) handleOutgoingMessages() {
 			}
 
 			if err := a.sendRaftMessage(msg); err != nil {
-				// a.logger.Debug("failed to send Raft message",
-				// 	zap.Uint64("to", msg.To),
-				// 	zap.Error(err))
+				a.logger.Debug("failed to send Raft message",
+					zap.Uint64("to", msg.To),
+					zap.Error(err))
 			}
 		}
 	}

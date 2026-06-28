@@ -42,7 +42,7 @@ func Run(cfg *internal.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to setup logger: %w", err)
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	logger.Info("Starting Cue node", zap.String("node_id", cfg.NodeID))
 

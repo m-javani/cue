@@ -166,10 +166,10 @@ func (p *ConnectionPair) Close() {
 		p.outboundCancel()
 	}
 	if p.inboundConn != nil {
-		p.inboundConn.CloseWithError(0, "connection pair closed")
+		_ = p.inboundConn.CloseWithError(0, "connection pair closed")
 	}
 	if p.outboundConn != nil {
-		p.outboundConn.CloseWithError(0, "connection pair closed")
+		_ = p.outboundConn.CloseWithError(0, "connection pair closed")
 	}
 }
 
@@ -190,7 +190,7 @@ func (p *ConnectionPair) SetInbound(ctx context.Context,
 		p.inboundCancel()
 	}
 	if p.inboundConn != nil {
-		p.inboundConn.CloseWithError(0, "replaced by new inbound connection")
+		_ = p.inboundConn.CloseWithError(0, "replaced by new inbound connection")
 	}
 
 	handlerCtx, cancel := context.WithCancel(ctx)
@@ -221,7 +221,7 @@ func (p *ConnectionPair) SetOutbound(ctx context.Context, conn *quic.Conn) {
 		p.outboundCancel()
 	}
 	if p.outboundConn != nil {
-		p.outboundConn.CloseWithError(0, "replaced by new outbound connection")
+		_ = p.outboundConn.CloseWithError(0, "replaced by new outbound connection")
 	}
 
 	handlerCtx, cancel := context.WithCancel(ctx)
@@ -898,7 +898,7 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 	// Get peer certificate from TLS connection state
 	connState := conn.ConnectionState()
 	if len(connState.TLS.PeerCertificates) == 0 {
-		conn.CloseWithError(0, "no client certificate")
+		_ = conn.CloseWithError(0, "no client certificate")
 		return
 	}
 	rawCerts := make([][]byte, len(connState.TLS.PeerCertificates))
@@ -910,7 +910,7 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 	stream, err := conn.AcceptStream(handshakeCtx)
 	if err != nil {
 		g.logger.Error("Failed to accept handshake stream", zap.Error(err))
-		conn.CloseWithError(0, "handshake stream failed")
+		_ = conn.CloseWithError(0, "handshake stream failed")
 		g.metrics.ConnectionFailed()
 		return
 	}
@@ -921,7 +921,7 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 	decoder := msgpack.NewDecoder(stream)
 	if err := decoder.Decode(&handshake); err != nil {
 		g.logger.Error("Failed to decode handshake", zap.Error(err))
-		conn.CloseWithError(0, "invalid handshake")
+		_ = conn.CloseWithError(0, "invalid handshake")
 		g.metrics.ConnectionFailed()
 		return
 	}
@@ -929,7 +929,7 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 	// Authorize: verify the certificate matches the claimed nodeID
 	if g.tlsVerifier != nil {
 		if err := g.tlsVerifier.VerifyPeer(rawCerts, handshake.ProxyID); err != nil {
-			conn.CloseWithError(0, "tls authorization failed")
+			_ = conn.CloseWithError(0, "tls authorization failed")
 			return
 		}
 	}
@@ -937,7 +937,7 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 	// Validate handshake
 	if handshake.ConnectionType != ConnectionTypeInbound && handshake.ConnectionType != ConnectionTypeOutbound {
 		g.logger.Error("Invalid connection type", zap.String("type", string(handshake.ConnectionType)))
-		conn.CloseWithError(0, "invalid connection type")
+		_ = conn.CloseWithError(0, "invalid connection type")
 		g.metrics.ConnectionFailed()
 		return
 	}
@@ -950,7 +950,7 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 	encoder := msgpack.NewEncoder(stream)
 	if err := encoder.Encode(response); err != nil {
 		g.logger.Error("Failed to send handshake response", zap.Error(err))
-		conn.CloseWithError(0, "handshake response failed")
+		_ = conn.CloseWithError(0, "handshake response failed")
 		g.metrics.ConnectionFailed()
 		return
 	}

@@ -169,10 +169,7 @@ func (m *DLQFileManager) write() {
 		// Success path
 		m.mu.Lock()
 		m.flushing = nil
-		m.busy = false // ← This was missing in some paths
-		if cap(batch) > initialCap*4 {
-			batch = make([]string, 0, initialCap)
-		}
+		m.busy = false
 		m.mu.Unlock()
 
 		// Check for chained flush

@@ -1288,7 +1288,7 @@ func TestClusterMembershipChanges(t *testing.T) {
 func TestSnapshotCompactionAndRestart(t *testing.T) {
 	cl, err := NewTestCluster(t)
 	assert.NoError(t, err)
-	defer cl.Cleanup()
+	defer func() { _ = cl.Cleanup() }()
 
 	const (
 		snapshotTriggerCount = uint64(20)
@@ -1557,7 +1557,7 @@ func TestSynPeers(t *testing.T) {
 			"follower %s should have FollowerActive status", followerID)
 	}
 	// update a followers peers list to have less peers
-	followerA, err := cl.GetAgent(followers[0])
+	followerA, _ := cl.GetAgent(followers[0])
 	peers := followerA.discovery.ListPeersAddrServerName()
 	var nodeIds []string
 	skipped := false
@@ -1568,7 +1568,7 @@ func TestSynPeers(t *testing.T) {
 		}
 		nodeIds = append(nodeIds, peer.NodeId)
 	}
-	followerA.handleUpdatePeersList(nodeIds)
+	_, _ = followerA.handleUpdatePeersList(nodeIds)
 
 	// Wait for sync connection
 	time.Sleep(3 * time.Second)
@@ -1702,7 +1702,7 @@ func TestTransferLeaderCommand(t *testing.T) {
 	assert.Equal(t, model.NodeStatusLeaderActive, leaderAgent.GetStatus(),
 		"leader should have LeaderActive status")
 
-	leaderTestNode, err := cl.GetNode(leaderID)
+	leaderTestNode, _ := cl.GetNode(leaderID)
 
 	// Verify followers
 	followers := cl.GetFollowerIDs()

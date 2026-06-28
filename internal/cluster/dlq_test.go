@@ -276,8 +276,6 @@ func TestDLQFileManager_WriteFunction(t *testing.T) {
 		m.mu.Unlock()
 	})
 
-
-
 	t.Run("shrinks oversized batch capacity", func(t *testing.T) {
 		tempDir := t.TempDir()
 		m, err := NewDLQFileManager(tempDir, 1024*1024)
@@ -436,7 +434,7 @@ func TestDLQFileManager_WriteErrorRecovery(t *testing.T) {
 
 		// Restore the file for cleanup
 		m.mu.Lock()
-		m.openCurrentFile()
+		_ = m.openCurrentFile()
 		m.busy = false
 		m.mu.Unlock()
 	})

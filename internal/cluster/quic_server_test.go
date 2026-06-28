@@ -198,28 +198,6 @@ func (h *quicTestHelper) connectNodes(from, to *quicTestNode) error {
 	)
 }
 
-// disconnectOutgoing manually removes an outgoing connection
-func (h *quicTestHelper) disconnectOutgoing(node *quicTestNode, targetID string) {
-	node.Server.mu.Lock()
-	defer node.Server.mu.Unlock()
-
-	if conn, exists := node.Server.outgoingConns[targetID]; exists {
-		conn.CloseWithError(0, "test disconnect")
-		delete(node.Server.outgoingConns, targetID)
-	}
-}
-
-// disconnectIncoming manually removes an incoming connection
-func (h *quicTestHelper) disconnectIncoming(node *quicTestNode, targetID string) {
-	node.Server.mu.Lock()
-	defer node.Server.mu.Unlock()
-
-	if conn, exists := node.Server.incomingConns[targetID]; exists {
-		conn.CloseWithError(0, "test disconnect")
-		delete(node.Server.incomingConns, targetID)
-	}
-}
-
 // close shuts down all servers
 func (h *quicTestHelper) close() {
 	h.cancel()
@@ -514,7 +492,7 @@ func TestQuicServer_ManualMapManipulation(t *testing.T) {
 	// Now manually manipulate - remove incoming from node3 (making it outgoing only)
 	node1.Server.mu.Lock()
 	if conn, exists := node1.Server.incomingConns["node3"]; exists {
-		conn.CloseWithError(0, "test disconnect")
+		_ = conn.CloseWithError(0, "test disconnect")
 		delete(node1.Server.incomingConns, "node3")
 	}
 	node1.Server.mu.Unlock()
@@ -753,7 +731,7 @@ func TestQuicServer_CleanupRetiringOutgoing(t *testing.T) {
 	require.NoError(t, err)
 
 	// Close the connection first so it can be cleaned up
-	conn.CloseWithError(0, "test close")
+	_ = conn.CloseWithError(0, "test close")
 
 	// Manually add a retiring connection with the closed connection
 	node1.Server.mu.Lock()
@@ -796,7 +774,7 @@ func TestQuicServer_CleanupRetiringIncoming(t *testing.T) {
 	require.NoError(t, err)
 
 	// Close the connection first so it can be cleaned up
-	conn.CloseWithError(0, "test close")
+	_ = conn.CloseWithError(0, "test close")
 
 	// Manually add a retiring connection with the closed connection
 	node1.Server.mu.Lock()

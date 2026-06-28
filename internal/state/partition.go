@@ -193,6 +193,7 @@ func (p *Partition) putJobSlice(s []*model.Job) {
 	if cap(s) > 512 {
 		return // let it be GC'd
 	}
+	//nolint:staticcheck // SA6002 doesn't apply to []*model.Job
 	jobSlicePool.Put(s[:0])
 }
 

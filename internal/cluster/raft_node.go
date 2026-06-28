@@ -171,7 +171,7 @@ func NewCRaft(
 		for i, id := range cfg.Peers {
 			peers[i] = raft.Peer{ID: id}
 		}
-		rawNode.Bootstrap(peers)
+		_ = rawNode.Bootstrap(peers)
 	}
 
 	return &CRaft{
@@ -444,7 +444,7 @@ func (c *CRaft) handleConfChange(changes []raftpb.ConfChangeSingle) {
 func (c *CRaft) handlePropose(req ProposeRequest) {
 	c.raftMu.Lock()
 	if err := c.node.Propose(req.Data); err != nil {
-		// c.logger.Debug("propose failed", zap.Error(err))
+		c.logger.Debug("propose failed", zap.Error(err))
 	}
 	c.raftMu.Unlock()
 }

@@ -321,7 +321,7 @@ func (s *ClusterQUIC) AcceptConnection(ctx context.Context) (string, *quic.Conn,
 	// Get peer certificate from TLS connection state
 	connState := conn.ConnectionState()
 	if len(connState.TLS.PeerCertificates) == 0 {
-		conn.CloseWithError(0, "no client certificate")
+		_ = conn.CloseWithError(0, "no client certificate")
 		return "", nil, fmt.Errorf("no client certificate")
 	}
 	rawCerts := make([][]byte, len(connState.TLS.PeerCertificates))
@@ -331,7 +331,7 @@ func (s *ClusterQUIC) AcceptConnection(ctx context.Context) (string, *quic.Conn,
 
 	nodeID, err := s.performHandshake(conn)
 	if err != nil {
-		conn.CloseWithError(0, "handshake failed")
+		_ = conn.CloseWithError(0, "handshake failed")
 		s.metrics.ConnectionRejected()
 		return "", nil, err
 	}
@@ -339,7 +339,7 @@ func (s *ClusterQUIC) AcceptConnection(ctx context.Context) (string, *quic.Conn,
 	// Authorize: verify the certificate matches the claimed nodeID
 	if s.tlsVerifier != nil {
 		if err := s.tlsVerifier.VerifyPeer(rawCerts, nodeID); err != nil {
-			conn.CloseWithError(0, "authorization failed")
+			_ = conn.CloseWithError(0, "authorization failed")
 			s.metrics.ConnectionRejected()
 			return "", nil, fmt.Errorf("peer authorization failed: %w", err)
 		}
@@ -352,7 +352,7 @@ func (s *ClusterQUIC) AcceptConnection(ctx context.Context) (string, *quic.Conn,
 	if exists && oldConn != nil {
 		go func() {
 			time.Sleep(rotateTLSWindow)
-			oldConn.CloseWithError(0, "replaced")
+			_ = oldConn.CloseWithError(0, "replaced")
 			s.metrics.ConnectionDropped()
 		}()
 	}
@@ -542,7 +542,7 @@ func (s *ClusterQUIC) Connect(ctx context.Context, port uint64, remoteAddr strin
 	stream, err := conn.OpenStreamSync(connectCtx)
 	if err != nil {
 		s.metrics.ConnectionError()
-		conn.CloseWithError(0, "failed to open stream")
+		_ = conn.CloseWithError(0, "failed to open stream")
 		return fmt.Errorf("failed to open stream: %w", err)
 	}
 
@@ -551,7 +551,7 @@ func (s *ClusterQUIC) Connect(ctx context.Context, port uint64, remoteAddr strin
 	if err := encoder.Encode(handshake); err != nil {
 		stream.CancelRead(0)
 		stream.CancelWrite(0)
-		conn.CloseWithError(0, "handshake encode failed")
+		_ = conn.CloseWithError(0, "handshake encode failed")
 		s.metrics.ReceiveError()
 		return fmt.Errorf("failed to encode handshake: %w", err)
 	}
@@ -562,7 +562,7 @@ func (s *ClusterQUIC) Connect(ctx context.Context, port uint64, remoteAddr strin
 	if err := decoder.Decode(&peerHandshake); err != nil {
 		stream.CancelRead(0)
 		stream.CancelWrite(0)
-		conn.CloseWithError(0, "failed to read peer handshake")
+		_ = conn.CloseWithError(0, "failed to read peer handshake")
 		s.metrics.ConnectionRejected()
 		return fmt.Errorf("failed to decode peer handshake: %w", err)
 	}
@@ -571,7 +571,7 @@ func (s *ClusterQUIC) Connect(ctx context.Context, port uint64, remoteAddr strin
 	if peerHandshake.NodeID == s.selfNodeID {
 		stream.CancelRead(0)
 		stream.CancelWrite(0)
-		conn.CloseWithError(0, "connect to self rejected")
+		_ = conn.CloseWithError(0, "connect to self rejected")
 		s.metrics.ConnectionRejected()
 		return fmt.Errorf("connect to self rejected node_id: %s", peerHandshake.NodeID)
 	}
@@ -590,7 +590,7 @@ func (s *ClusterQUIC) Connect(ctx context.Context, port uint64, remoteAddr strin
 				conn:      oldConn,
 			})
 		} else {
-			oldConn.CloseWithError(0, "retiring connection limit reached")
+			_ = oldConn.CloseWithError(0, "retiring connection limit reached")
 			s.metrics.ConnectionDropped()
 		}
 	}
@@ -788,7 +788,7 @@ func (s *ClusterQUIC) CleanupRetiringOutgoing() {
 
 	for _, rc := range s.retiringOutgoingConns {
 		if now.Sub(rc.timestamp) >= rotateTLSWindow {
-			rc.conn.CloseWithError(0, "rotated TLS")
+			_ = rc.conn.CloseWithError(0, "rotated TLS")
 			s.metrics.ConnectionDropped()
 			// false - drop the connection (don't append)
 		} else {
@@ -892,6 +892,10 @@ func (s *ClusterQUIC) SyncConnections(nodeInfos []PeerResolvedInfo) error {
 			defer wg.Done()
 
 			_, portStr, err := net.SplitHostPort(pi.Addr)
+			if err != nil {
+				s.logger.Error("invalid address", zap.String("addr", pi.Addr), zap.Error(err))
+				return
+			}
 			port, err := strconv.Atoi(portStr)
 			if err != nil {
 				s.logger.Error("invalid address", zap.String("addr", pi.Addr), zap.Error(err))
@@ -960,6 +964,9 @@ func (s *ClusterQUIC) ReconnectToPeers(nodeInfos []PeerResolvedInfo) ([]string, 
 			defer cancel()
 
 			_, portStr, err := net.SplitHostPort(p.Addr)
+			if err != nil {
+				s.logger.Error("missing port in connection address", zap.Error(err))
+			}
 			port, err := strconv.Atoi(portStr)
 			if err != nil {
 				s.logger.Error("missing port in connection address", zap.Error(err))

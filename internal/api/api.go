@@ -258,7 +258,7 @@ func (api *AdminAPI) authMiddleware(next http.HandlerFunc, requiredRoles ...stri
 func (api *AdminAPI) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (api *AdminAPI) handleMetrics(w http.ResponseWriter, r *http.Request) {
@@ -416,7 +416,7 @@ func (api *AdminAPI) handleGetClusterInfo(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"leader_id": leaderStr,
 		"members": map[string]any{
 			"voters":   voters,

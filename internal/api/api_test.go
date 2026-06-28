@@ -123,27 +123,6 @@ func makeRequest(t *testing.T, api *AdminAPI, method, path, token string, body i
 	return rr
 }
 
-func makeRequestWithoutBearer(t *testing.T, api *AdminAPI, method, path, token string, body interface{}) *httptest.ResponseRecorder {
-	var reqBody []byte
-	if body != nil {
-		var err error
-		reqBody, err = json.Marshal(body)
-		require.NoError(t, err)
-	}
-
-	req := httptest.NewRequest(method, path, bytes.NewReader(reqBody))
-	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", token) // No "Bearer " prefix
-	}
-
-	rr := httptest.NewRecorder()
-	handler := api.httpServer.Handler
-	handler.ServeHTTP(rr, req)
-
-	return rr
-}
-
 // respondToCommand reads a command from the channel and sends a response
 func respondToCommand(t *testing.T, commandCh chan model.Command, success bool, errorMsg string) {
 	select {
@@ -165,14 +144,6 @@ func respondToCommand(t *testing.T, commandCh chan model.Command, success bool, 
 	case <-time.After(6 * time.Second):
 		t.Error("timeout waiting for command")
 	}
-}
-
-// respondToCommandAsync responds to a command in a separate goroutine
-// This is useful when you want to respond after the request is made
-func respondToCommandAsync(t *testing.T, commandCh chan model.Command, success bool, errorMsg string) {
-	go func() {
-		respondToCommand(t, commandCh, success, errorMsg)
-	}()
 }
 
 // makeRequestAndRespond makes a request and automatically responds to the command

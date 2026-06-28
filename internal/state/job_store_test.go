@@ -212,7 +212,7 @@ func TestJobStore_IsDone(t *testing.T) {
 	js := NewJobStore(10)
 
 	job := &model.Job{ID: "job-1"}
-	js.Create(job)
+	_, _ = js.Create(job)
 
 	// Not done
 	if js.IsDone("job-1") {
@@ -302,8 +302,8 @@ func TestJobStore_Len(t *testing.T) {
 	// After creating jobs
 	job1 := &model.Job{ID: "job-1"}
 	job2 := &model.Job{ID: "job-2"}
-	js.Create(job1)
-	js.Create(job2)
+	_, _ = js.Create(job1)
+	_, _ = js.Create(job2)
 
 	if js.Len() != 2 {
 		t.Errorf("expected Len 2, got %d", js.Len())
@@ -397,7 +397,7 @@ func TestJobStore_GetByIDReleasedSlot(t *testing.T) {
 
 	// Create job2 reusing slot
 	job2 := &model.Job{ID: "job-2"}
-	js.Create(job2)
+	_, _ = js.Create(job2)
 
 	// job1 should not exist
 	job, exists := js.GetByID("job-1")
@@ -422,7 +422,7 @@ func TestJobStore_GetByIDAfterForceRelease(t *testing.T) {
 	js := NewJobStore(10)
 
 	job := &model.Job{ID: "job-1"}
-	js.Create(job)
+	_, _ = js.Create(job)
 
 	// Force release
 	js.ForceRelease("job-1")

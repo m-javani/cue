@@ -201,7 +201,7 @@ func (p *Proxy) Connect(ctx context.Context, direction ConnectionType) (*quic.Co
 	// === Handshake ===
 	stream, err := conn.OpenStreamSync(connectCtx)
 	if err != nil {
-		conn.CloseWithError(0, "handshake stream failed")
+		_ = conn.CloseWithError(0, "handshake stream failed")
 		return nil, err
 	}
 	defer stream.Close()
@@ -452,12 +452,12 @@ func (p *Proxy) CloseConnection(direction ConnectionType) error {
 	switch direction {
 	case ConnectionTypeInbound:
 		if p.inboundConn != nil {
-			p.inboundConn.CloseWithError(0, "test: inbound closed")
+			_ = p.inboundConn.CloseWithError(0, "test: inbound closed")
 			p.inboundConn = nil
 		}
 	case ConnectionTypeOutbound:
 		if p.outboundConn != nil {
-			p.outboundConn.CloseWithError(0, "test: outbound closed")
+			_ = p.outboundConn.CloseWithError(0, "test: outbound closed")
 			p.outboundConn = nil
 		}
 	default:
@@ -494,10 +494,10 @@ func (p *Proxy) Stop() {
 
 	// Close connections with error to unblock AcceptStream
 	if p.inboundConn != nil {
-		p.inboundConn.CloseWithError(0, "proxy stopped")
+		_ = p.inboundConn.CloseWithError(0, "proxy stopped")
 	}
 	if p.outboundConn != nil {
-		p.outboundConn.CloseWithError(0, "proxy stopped")
+		_ = p.outboundConn.CloseWithError(0, "proxy stopped")
 	}
 
 	done := make(chan struct{})
@@ -523,7 +523,6 @@ type Proxies struct {
 	ctx         context.Context
 	logger      *zap.Logger
 	mu          sync.RWMutex
-	nextID      atomic.Uint64
 	certDir     string
 	ca          *testutils.CAInfo
 }
@@ -777,7 +776,7 @@ func TestGateway_HappyPath_SingleProxy(t *testing.T) {
 		Topic: "topic-1",
 		Data:  []byte(`{"task": "happy-path-test"}`),
 	}
-	prx.SendAddJob(job)
+	_ = prx.SendAddJob(job)
 	t.Log("Sent AddJob")
 
 	// Give time for responses
@@ -863,7 +862,7 @@ func TestGateway_MultiProxy_Topology(t *testing.T) {
 			Data:  []byte(`{"test": true}`),
 		}
 		// Send from any prx (doesn't matter for this test)
-		prx2.SendAddJob(job)
+		_ = prx2.SendAddJob(job)
 	}
 
 	time.Sleep(500 * time.Millisecond)
@@ -936,7 +935,7 @@ func TestGateway_Proxy_Reconnection(t *testing.T) {
 		Topic: "orders",
 		Data:  []byte(`{"phase": "before"}`),
 	}
-	prx.SendAddJob(job1)
+	_ = prx.SendAddJob(job1)
 	time.Sleep(300 * time.Millisecond)
 
 	// === Test 1: Close Inbound connection only ===
@@ -974,7 +973,7 @@ func TestGateway_Proxy_Reconnection(t *testing.T) {
 		Topic: "orders",
 		Data:  []byte(`{"phase": "after"}`),
 	}
-	prx.SendAddJob(job2)
+	_ = prx.SendAddJob(job2)
 	time.Sleep(400 * time.Millisecond)
 
 	// Verify responses for tracked requests
@@ -1019,7 +1018,7 @@ func TestGateway_Proxy_GracefulRemoval(t *testing.T) {
 		Topic: "orders",
 		Data:  []byte(`{"phase": "before"}`),
 	}
-	prx.SendAddJob(job1)
+	_ = prx.SendAddJob(job1)
 	time.Sleep(300 * time.Millisecond)
 
 	// === Gracefully stop the prx ===
@@ -1045,7 +1044,7 @@ func TestGateway_Proxy_GracefulRemoval(t *testing.T) {
 		Topic: "orders",
 		Data:  []byte(`{"phase": "after"}`),
 	}
-	newProxy.SendAddJob(job2)
+	_ = newProxy.SendAddJob(job2)
 	time.Sleep(300 * time.Millisecond)
 
 	// === Dispatch and verify correct routing ===
@@ -1106,7 +1105,7 @@ func TestGateway_MultipleTopics_PerProxy(t *testing.T) {
 			Topic: topic,
 			Data:  []byte(`{"test": "multi-topic"}`),
 		}
-		prx.SendAddJob(job)
+		_ = prx.SendAddJob(job)
 	}
 
 	time.Sleep(600 * time.Millisecond)

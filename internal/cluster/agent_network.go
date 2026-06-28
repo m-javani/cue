@@ -206,7 +206,7 @@ func (a *ClusterAgent) handleConnections() {
 // handlePeerConnection handles a single peer connection
 func (a *ClusterAgent) handlePeerConnection(nodeID string, conn *quic.Conn) {
 	defer func() {
-		conn.CloseWithError(0, "connection closed")
+		_ = conn.CloseWithError(0, "connection closed")
 		// a.logger.Debug("peer connection closed", zap.String("peer_node_id", nodeID))
 	}()
 

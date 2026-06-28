@@ -137,8 +137,8 @@ func (c *StorageCore) saveSnapshotMeta() error {
 	}
 
 	if dir, err := os.Open(c.snapshotPath); err == nil {
-		dir.Sync()
-		dir.Close()
+		_ = dir.Sync()
+		_ = dir.Close()
 	}
 	return nil
 }
@@ -150,7 +150,7 @@ func (c *StorageCore) installSnapshot(meta raftpb.SnapshotMetadata) error {
 
 	c.confState = meta.ConfState
 	c.snapshotMeta = meta
-	c.saveSnapshotMeta()
+	_ = c.saveSnapshotMeta()
 
 	// do not compact on leader sent snapshots
 
@@ -433,7 +433,7 @@ func (c *StorageCore) compact() error {
 		ConfState: c.confState,
 	}
 	c.snapshotMeta = snapshotMeta
-	c.saveSnapshotMeta()
+	_ = c.saveSnapshotMeta()
 
 	// Truncate WAL file
 	// Clean jobIndex: remove entries that were truncated

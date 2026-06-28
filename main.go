@@ -6,5 +6,5 @@ package main
 import "github.com/m-javani/cue/cmd"
 
 func main() {
-	cmd.Execute()
+	_ = cmd.Execute()
 }

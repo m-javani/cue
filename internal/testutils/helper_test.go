@@ -41,7 +41,7 @@ func TestNewDevLogger(t *testing.T) {
 
 	// Verify we have the correct config by checking the logger's core
 	// The logger should be able to log without errors
-	logger.Sync()
+	_ = logger.Sync()
 }
 
 func TestGetCertsPath(t *testing.T) {
@@ -104,7 +104,7 @@ func TestGetProjectRoot_Panic(t *testing.T) {
 	// Save current directory
 	originalDir, err := os.Getwd()
 	assert.NoError(t, err)
-	defer os.Chdir(originalDir)
+	defer func() { _ = os.Chdir(originalDir) }()
 
 	// Create a temp directory without go.mod
 	tempDir := t.TempDir()

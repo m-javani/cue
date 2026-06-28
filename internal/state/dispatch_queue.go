@@ -193,11 +193,8 @@ func (dq *DispatchQueue) findOrCreateBucket(targetSec int64) int {
 // ==================== READ ====================
 
 func (dq *DispatchQueue) ReadBatch(count int, activeOffset, lastBucket, buckOffset int) []dispatchItem {
-
-	items := make([]dispatchItem, 0, count)
-
 	// 1. Read from pending buckets (past or current second)
-	items = dq.readPending(count, lastBucket, buckOffset) // simplified for now
+	items := dq.readPending(count, lastBucket, buckOffset) // simplified for now
 
 	// 2. Read from active if needed
 	remaining := count - len(items)

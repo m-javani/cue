@@ -3173,7 +3173,7 @@ func TestI2_NoDuplicateCompletion(t *testing.T) {
 	time.Sleep(2 * time.Second)
 
 	// Get final state
-	success, errors, dispatched, dropped, done = tester.GetCounts()
+	_, _, dispatched, dropped, done = tester.GetCounts()
 	t.Logf("After duplicate Dones: dispatched=%d, done=%d, dropped=%d", dispatched, done, dropped)
 
 	// The done counter in the tester counts every Done command sent,

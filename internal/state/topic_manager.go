@@ -72,7 +72,6 @@ type TopicManager struct {
 	metrics        *internal.TopicManagerMetrics
 	logger         *zap.Logger
 	config         *internal.PartitionConfig
-	parentCtx      context.Context
 
 	commandBuffer   int
 	heartbeatBuffer int
