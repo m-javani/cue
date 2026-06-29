@@ -240,7 +240,7 @@ func writePEM(path, blockType string, der []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return pem.Encode(f, &pem.Block{Type: blockType, Bytes: der})
 }
 
@@ -249,6 +249,6 @@ func writeKeyPEM(path string, key *rsa.PrivateKey) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return pem.Encode(f, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
 }

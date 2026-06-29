@@ -267,7 +267,7 @@ func (a *ClusterAgent) Start() error {
 // Stop gracefully shuts down the agent
 func (a *ClusterAgent) Stop() {
 	if a.quicServer != nil {
-		a.quicServer.Close()
+		_ = a.quicServer.Close()
 	}
 }
 

@@ -34,7 +34,7 @@ func SyncDir(dir string) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 
 	return d.Sync()
 }

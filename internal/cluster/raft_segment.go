@@ -373,11 +373,11 @@ func (sw *SegmentedWAL) rotate() error {
 	// Step 2: Seal old active segment
 	//
 	if err := oldFile.Sync(); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("sync old segment: %w", err)
 	}
 	if err := oldFile.Close(); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("close old segment: %w", err)
 	}
 
@@ -386,11 +386,11 @@ func (sw *SegmentedWAL) rotate() error {
 		fmt.Sprintf(sealedSegmentFmt, oldStart, lastIdx),
 	)
 	if err := os.Rename(oldPath, sealedPath); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("rename sealed segment: %w", err)
 	}
 	if err := utils.SyncDir(sw.dir); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("sync wal dir after sealing: %w", err)
 	}
 
@@ -486,12 +486,12 @@ func (sw *SegmentedWAL) Recover(snapshotIndex uint64, fn func(raftpb.Entry) erro
 			}
 			if entry.Index > snapshotIndex {
 				if err := fn(entry); err != nil {
-					f.Close()
+					_ = f.Close()
 					return err
 				}
 			}
 		}
-		f.Close()
+		_ = f.Close()
 	}
 	return nil
 }
@@ -700,7 +700,7 @@ func (sw *SegmentedWAL) Close() error {
 		}
 	}
 	if sw.active != nil && sw.active.writeFile != nil {
-		sw.active.writeFile.Close()
+		_ = sw.active.writeFile.Close()
 	}
 	return nil
 }

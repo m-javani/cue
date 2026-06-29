@@ -98,7 +98,7 @@ func (dq *DispatchQueue) currentSec() int64 {
 
 func (dq *DispatchQueue) AddNewJob(job JobRef) error {
 	if dq.aTail >= len(dq.active) {
-		return errors.New("Active queue capacity exceeded - increase bucketCap")
+		return errors.New("active queue capacity exceeded - increase bucketCap")
 	}
 	dq.active[dq.aTail] = job
 	dq.aTail++

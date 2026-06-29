@@ -584,7 +584,7 @@ func (c *CRaft) handleControl(cmd ControlCmd) {
 
 func (c *CRaft) Stop() {
 	c.stopOnce.Do(func() {
-		c.storage.Close()
+		_ = c.storage.Close()
 		if c.cancel != nil {
 			c.cancel()
 		}

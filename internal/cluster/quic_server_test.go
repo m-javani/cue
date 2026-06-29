@@ -57,7 +57,7 @@ func newQUICTestHelper(t *testing.T) *quicTestHelper {
 
 	dir, err := os.MkdirTemp("", "quic-test-*")
 	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	logger, err := zap.NewDevelopment()
 	require.NoError(t, err)
@@ -108,7 +108,7 @@ func (h *quicTestHelper) createNode(id string) *quicTestNode {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(h.t, err)
 		port = listener.Addr().(*net.TCPAddr).Port
-		listener.Close()
+		_ = listener.Close()
 
 		// Small delay to ensure port is released
 		time.Sleep(10 * time.Millisecond)

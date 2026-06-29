@@ -143,7 +143,7 @@ func NewGatewayTester(t *testing.T) *GatewayTester {
 	t.Cleanup(func() {
 		tester.Close()
 		// Clean up certificate directory for this test
-		os.RemoveAll(certBasePath)
+		_ = os.RemoveAll(certBasePath)
 	})
 
 	// Add default proxy
@@ -156,7 +156,7 @@ func NewGatewayTester(t *testing.T) *GatewayTester {
 func (gt *GatewayTester) Close() {
 	gt.Proxies.Stop()
 	if gt.Gateway != nil {
-		gt.Gateway.Close()
+		_ = gt.Gateway.Close()
 	}
 	gt.Internals.Stop()
 }
@@ -204,7 +204,7 @@ func (p *Proxy) Connect(ctx context.Context, direction ConnectionType) (*quic.Co
 		_ = conn.CloseWithError(0, "handshake stream failed")
 		return nil, err
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	handshake := Handshake{
 		ProxyID:         p.ID,
@@ -281,7 +281,7 @@ func (p *Proxy) Run() {
 }
 
 func (p *Proxy) handleOutboundStream(stream *quic.Stream) {
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	// Read length-prefixed message
 	var lenBuf [4]byte

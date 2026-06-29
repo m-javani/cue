@@ -258,7 +258,7 @@ func (p *ConnectionPair) runOutboundHandler(
 			p.metrics.NetworkError()
 			return err
 		}
-		defer stream.Close()
+		defer func() { _ = stream.Close() }()
 
 		// Length prefix
 		lenBuf := make([]byte, 4)
@@ -422,7 +422,7 @@ func (p *ConnectionPair) runInboundHandler(ctx context.Context,
 				zap.String("proxy_id", p.ProxyID))
 
 			stream.CancelRead(0)
-			stream.Close()
+			_ = stream.Close()
 			p.metrics.NetworkError()
 			continue
 		}
@@ -450,7 +450,7 @@ func (p *ConnectionPair) runInboundHandler(ctx context.Context,
 					}
 				}
 			}
-			stream.Close()
+			_ = stream.Close()
 			continue
 		}
 
@@ -477,7 +477,7 @@ func (p *ConnectionPair) runInboundHandler(ctx context.Context,
 			case <-ctx.Done():
 				return
 			}
-			stream.Close()
+			_ = stream.Close()
 			continue
 		}
 
@@ -510,7 +510,7 @@ func (p *ConnectionPair) runInboundHandler(ctx context.Context,
 			}
 		default:
 			stream.CancelRead(0)
-			stream.Close()
+			_ = stream.Close()
 			p.metrics.NetworkError()
 			continue
 		}
@@ -914,7 +914,7 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 		g.metrics.ConnectionFailed()
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	// Decode handshake
 	var handshake Handshake

@@ -56,7 +56,7 @@ func GetTLSVersion(certPath, keyPath, caPath string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("failed to open %s: %w", path, err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		if _, err := io.Copy(hasher, file); err != nil {
 			return "", fmt.Errorf("failed to hash %s: %w", path, err)

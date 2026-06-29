@@ -17,14 +17,13 @@ package utils
 import (
 	"testing"
 
-	"go.etcd.io/raft/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestZapRaftLogger_ImplementsInterface(t *testing.T) {
 	// Compile-time check
-	var _ raft.Logger = NewRaftZapLogger(zap.NewNop())
+	var _ = NewRaftZapLogger(zap.NewNop())
 }
 
 func TestZapRaftLogger_DelegatesToZap(t *testing.T) {

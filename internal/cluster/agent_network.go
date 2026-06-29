@@ -235,7 +235,7 @@ func (a *ClusterAgent) handlePeerConnection(nodeID string, conn *quic.Conn) {
 
 // handleRequestStream processes a single request stream
 func (a *ClusterAgent) handleRequestStream(nodeID string, stream *quic.Stream) {
-	defer (*stream).Close()
+	defer func() { _ = (*stream).Close() }()
 
 	req, err := a.quicServer.ReadRequest(stream)
 	if err != nil {
@@ -388,7 +388,7 @@ func (a *ClusterAgent) startTLSWatcher() {
 		a.logger.Error("failed to create file watcher", zap.Error(err))
 		return
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	// Add certificate files to watcher
 	files := []string{a.certPath, a.keyPath, a.caCertPath}

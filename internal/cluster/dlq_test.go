@@ -54,7 +54,7 @@ func TestDLQFileManager_AppendBatch(t *testing.T) {
 		tempDir := t.TempDir()
 		m, err := NewDLQFileManager(tempDir, 1024*1024)
 		require.NoError(t, err)
-		defer m.Close()
+		defer func() { _ = m.Close() }()
 
 		m.AppendBatch(time.Now().Unix(), "test-topic", []string{"job1", "job2"})
 
@@ -374,7 +374,7 @@ func TestDLQFileManager_WriteErrorRecovery(t *testing.T) {
 
 		// Close the manager and file
 		m.mu.Lock()
-		m.writeFile.Close()
+		_ = m.writeFile.Close()
 		m.writeFile = nil
 		m.closed.Store(true)
 		m.flushing = batch
@@ -411,7 +411,7 @@ func TestDLQFileManager_WriteErrorRecovery(t *testing.T) {
 
 		// Set the writeFile to nil to force error
 		m.mu.Lock()
-		m.writeFile.Close()
+		_ = m.writeFile.Close()
 		m.writeFile = nil
 		m.flushing = batch
 		m.busy = true

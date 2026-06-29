@@ -37,7 +37,7 @@ func TestNodeStartup(t *testing.T) {
 	// Create temp directory for all test files
 	tmpDir, err := os.MkdirTemp("", "cue-node-test-*")
 	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Create certs
 	ca, err := testutils.CreateCA(tmpDir, "test-ca", 1, "localhost")
@@ -170,16 +170,16 @@ tls_verifier:
 
 	t.Log("Waiting for node to become healthy...")
 	healthy := false
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		resp, err := client.Get(healthURL)
 		if err == nil && resp.StatusCode == http.StatusOK {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			healthy = true
 			t.Log("Node is healthy!")
 			break
 		}
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

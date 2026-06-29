@@ -169,7 +169,7 @@ func (tw *TestWAL) MustReadFrom(from uint64) []raftpb.Entry {
 	if err != nil {
 		tw.t.Fatalf("new reader: %v", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	var entries []raftpb.Entry
 	for {
@@ -431,7 +431,7 @@ func TestNewSegmentedWal_NewWAL_CleansUpTempFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create WAL: %v", err)
 	}
-	defer wal.Close()
+	defer func() { _ = wal.Close() }()
 
 	// 5. Verify .tmp file was removed
 	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
@@ -537,7 +537,7 @@ func TestNewSegmentedWal_ReopenExisting(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer wal.Close()
+		defer func() { _ = wal.Close() }()
 
 		if wal.nextIndex != 6 {
 			t.Fatalf("nextIndex = %d, want 6", wal.nextIndex)
@@ -622,7 +622,7 @@ func TestNewSegmentedWal_InvalidLayout(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		defer wal.Close()
+		defer func() { _ = wal.Close() }()
 
 		tw := &TestWAL{
 			SegmentedWAL: wal,
@@ -1140,7 +1140,7 @@ func TestReader_StreamsCorrectly(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 
 		entries := tw.readAllFromReader(r) // helper defined below
 
@@ -1160,7 +1160,7 @@ func TestReader_StreamsCorrectly(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer r.Close()
+		defer func() { _ = r.Close() }()
 
 		count := 0
 		for {
@@ -1243,8 +1243,8 @@ func TestWALReader_ReadsEntries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer os.Remove(tmpfile.Name())
-		defer tmpfile.Close()
+		defer func() { _ = os.Remove(tmpfile.Name()) }()
+		defer func() { _ = tmpfile.Close() }()
 
 		if _, err := tmpfile.Write(be.Data); err != nil {
 			t.Fatal(err)
@@ -1584,7 +1584,7 @@ func TestIntegration_CrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewSegmentedWal failed: %v", err)
 		}
-		defer wal.Close()
+		defer func() { _ = wal.Close() }()
 
 		// .tmp should be gone
 		if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
@@ -1613,7 +1613,7 @@ func TestIntegration_CrashRecovery(t *testing.T) {
 		// Simulate crash: remove active file
 		for _, name := range tw.GetSegmentPaths() {
 			if strings.HasSuffix(name, ".active") {
-				os.Remove(filepath.Join(tw.dir, name))
+				_ = os.Remove(filepath.Join(tw.dir, name))
 				break
 			}
 		}
