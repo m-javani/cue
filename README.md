@@ -8,7 +8,11 @@ Cue is for teams who need reliable job dispatch without operating complex infras
 
 ---
 
-[![codecov](https://codecov.io/gh/yourusername/cue/branch/main/graph/badge.svg)](https://codecov.io/gh/yourusername/cue)
+[![CI](https://github.com/m-javani/cue/actions/workflows/ci.yml/badge.svg)](https://github.com/m-javani/cue/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/m-javani/cue/branch/main/graph/badge.svg)](https://codecov.io/gh/m-javani/cue)
+[![Go Report Card](https://goreportcard.com/badge/github.com/m-javani/cue)](https://goreportcard.com/report/github.com/m-javani/cue)
+[![Go Version](https://img.shields.io/badge/Go-1.26.3-blue)](https://golang.org/)
+[![Docker Pulls](https://img.shields.io/docker/pulls/m-javani/cue)](https://hub.docker.com/r/m-javani/cue)
 
 ---
 
