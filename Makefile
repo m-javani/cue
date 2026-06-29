@@ -16,6 +16,7 @@ help:
 	@echo "  build                          - Build production binary"
 	@echo "  docker-build                   - Build Docker image (full build in container)"
 	@echo "  test                           - Run unit tests with coverage"
+	@echo "  test-sum                       - Run unit tests with gotestsum (formatted output)"
 	@echo "  test-integration               - Run all integration tests with coverage"
 	@echo "  test-integration-package PKG=<path> - Run integration tests for specific package"
 	@echo "                                 Example: make test-integration-package PKG=./internal/cluster/integration"
@@ -46,6 +47,23 @@ docker-build:
 # Run unit tests only (explicitly list packages without integration)
 test:
 	@echo "🧪 Running unit tests with coverage..."
+	go test -failfast -v -coverprofile=coverage.unit.cov \
+		. \
+		./internal/cluster \
+		./internal/proxy \
+		./internal/model \
+		./internal/state \
+		./internal/api \
+		./internal/utils \
+		./internal \
+		./cmd \
+		./pkg/discovery \
+		./pkg/verifier
+	@echo "✅ Unit tests complete"
+
+# Run unit tests using gotestsum (formatted output)
+test-sum:
+	@echo "🧪 Running unit tests with gotestsum..."
 	gotestsum --format testname -- -failfast -v -coverprofile=coverage.unit.cov \
 		. \
 		./internal/cluster \
