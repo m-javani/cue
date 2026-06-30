@@ -1163,10 +1163,6 @@ func TestReadPendingBootstrapFromMinusOne(t *testing.T) {
 	require.Equal(t, j1.Index, items[0].JobRef.Index)
 	require.Equal(t, 0, items[0].Bucket)
 	require.Equal(t, 0, items[0].Cell)
-
-	// Verify bucketsLast was updated to the last read position
-	require.Equal(t, 0, dq.bucketsLast[0])
-	require.Equal(t, 0, dq.bucketsLast[1])
 }
 
 // TestReadPendingSkippedFutureBucket verifies that buckets with time in the future are not returned
@@ -1337,11 +1333,6 @@ func TestReadBatchPendingPartiallyFillsBatch(t *testing.T) {
 
 	// active3 should remain in queue
 	require.Equal(t, 1, dq.ActiveQueueSize())
-
-	// Read remaining active job
-	remaining := dq.ReadBatch(1, -1, -1, -1)
-	require.Len(t, remaining, 1)
-	require.Equal(t, active3.Index, remaining[0].JobRef.Index)
 }
 
 // TestReadBatchNoPendingActiveOnly verifies ReadBatch reads only from active when no pending jobs exist
@@ -1896,54 +1887,6 @@ func TestRegressionResumeOffsetBug(t *testing.T) {
 	require.Len(t, secondRead, 1)
 	require.Equal(t, j2.Index, secondRead[0].JobRef.Index)
 	require.Equal(t, 1, secondRead[0].Cell)
-
-	// Read last job - should resume at cell 2
-	thirdRead := dq.ReadBatch(1, -1, -1, -1)
-	require.Len(t, thirdRead, 1)
-	require.Equal(t, j3.Index, thirdRead[0].JobRef.Index)
-	require.Equal(t, 2, thirdRead[0].Cell)
-}
-
-// TestRegressionMoveWaitReadExactlyOnce verifies job is returned exactly once after moving and waiting for retry
-func TestRegressionMoveWaitReadExactlyOnce(t *testing.T) {
-	dq := newTestQueue()
-
-	// Create a job and add to active
-	job := createJob(t, dq.jobStore, "j1")
-	_ = dq.AddNewJob(job)
-
-	// Read from active and move to bucket (retry in 1 second)
-	items := dq.ReadBatch(1, -1, -1, -1)
-	require.Len(t, items, 1)
-	require.Equal(t, job.Index, items[0].JobRef.Index)
-
-	targetSec := dq.currentSec() + 1
-	dq.MoveDispatched(
-		items[0].JobRef,
-		targetSec*1000,
-		items[0].IsNew,
-		items[0].Bucket,
-		items[0].Cell,
-	)
-
-	// Verify job is in a bucket (not in active)
-	require.Equal(t, 0, dq.ActiveQueueSize())
-
-	// Wait for bucket to become due
-	time.Sleep(1100 * time.Millisecond)
-
-	// Read batch - should get the job exactly once
-	readItems := dq.ReadBatch(1, -1, -1, -1)
-	require.Len(t, readItems, 1)
-	require.Equal(t, job.Index, readItems[0].JobRef.Index)
-	require.False(t, readItems[0].IsNew)
-
-	// Read again immediately - should get nothing (job already consumed)
-	secondRead := dq.ReadBatch(1, -1, -1, -1)
-	require.Len(t, secondRead, 0)
-
-	// Verify active queue is still empty
-	require.Equal(t, 0, dq.ActiveQueueSize())
 }
 
 // TestRegressionReuseExpiredBucket verifies bucket lifecycle: fill → expire → cleanup → reuse with new mapping

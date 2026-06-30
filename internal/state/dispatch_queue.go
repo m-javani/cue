@@ -205,6 +205,7 @@ func (dq *DispatchQueue) ReadBatch(count int, activeOffset, lastBucket, buckOffs
 	return items
 }
 
+// readPending does not advance the bucketsLast offsets
 func (dq *DispatchQueue) readPending(count int, bucketIndx, cell int) []dispatchItem {
 	nowSec := dq.currentSec()
 
@@ -220,8 +221,6 @@ func (dq *DispatchQueue) readPending(count int, bucketIndx, cell int) []dispatch
 	}
 
 	items := make([]dispatchItem, 0)
-	lastBucket := bucketIndx
-	lastCell := cell
 
 	for i := bucketIndx; i < dq.numBuckets && len(items) < count; i++ {
 		b := &dq.buckets[i]
@@ -242,21 +241,14 @@ func (dq *DispatchQueue) readPending(count int, bucketIndx, cell int) []dispatch
 					Bucket: i,
 					Cell:   c, // Use cell, not b.Head
 				})
-				lastCell = c
 			}
 		}
-		lastBucket = i
-	}
-
-	// Update last positions
-	if len(items) > 0 {
-		dq.bucketsLast[0] = lastBucket
-		dq.bucketsLast[1] = lastCell
 	}
 
 	return items
 }
 
+// readActive removes the items and advances it head - despite readPending
 func (dq *DispatchQueue) readActive(max int, offset int, items []dispatchItem) []dispatchItem {
 	from := offset + 1
 	if from < dq.aHead {
@@ -304,6 +296,25 @@ func (dq *DispatchQueue) CleanupOneExpiredBucket() bool {
 	processBucket := func(idx int, b *Bucket) bool {
 		if b.TimeSec == -1 || b.TimeSec >= nowSec || b.Head+1 >= b.Tail {
 			return false
+		}
+
+		// NEW: Only clean buckets that are OLDER than the last processed bucket
+		// Get the time of the last processed bucket
+		if dq.bucketsLast[0] != -1 {
+			lastBucketTime := dq.bucketToTime[dq.bucketsLast[0]]
+			// If we have a valid last processed bucket time
+			if lastBucketTime != -1 {
+				// Bucket is safe to clean only if its time is < last processed time
+				// AND it's not the same bucket as the last processed one
+				if b.TimeSec >= lastBucketTime {
+					return false // This bucket is newer, may still have jobs to process
+				}
+
+				// If it's the same bucket, we might still be processing it
+				if idx == dq.bucketsLast[0] {
+					return false // Don't clean the current bucket being processed
+				}
+			}
 		}
 
 		// Move pointer for next call
