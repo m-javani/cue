@@ -16,7 +16,6 @@ package state
 
 import (
 	"errors"
-	"fmt"
 	"time"
 )
 
@@ -284,7 +283,7 @@ func (dq *DispatchQueue) ActiveQueueSize() int {
 }
 
 // CleanupOneExpiredBucket finds the next expired bucket and sends jobs to DLQ.
-// Only cleans ONE bucket per call. Respects safety gap.
+// Only cleans ONE bucket per call.
 func (dq *DispatchQueue) CleanupOneExpiredBucket() bool {
 	if dq.dlqBuffer == nil || dq.jobStore == nil {
 		return false
@@ -293,40 +292,27 @@ func (dq *DispatchQueue) CleanupOneExpiredBucket() bool {
 	nowSec := time.Now().Unix()
 	startIdx := dq.nextCleanupIdx
 
-	// Safety gap: do not clean buckets that are too close to the last processed one
-	const safetyGapSec = 10 // adjust if needed (e.g. 5 ~ 15)
-
 	// Helper to process a single bucket
 	processBucket := func(idx int, b *Bucket) bool {
 		if b.TimeSec == -1 || b.TimeSec >= nowSec || b.Head+1 >= b.Tail {
 			return false
 		}
 
-		// NEW: Enforce safety gap from last processed bucket
-		if dq.bucketsLast[0] != -1 {
-			lastBucketTime := dq.bucketToTime[dq.bucketsLast[0]]
-			if lastBucketTime != -1 {
-				// Only clean if this bucket is sufficiently older
-				if b.TimeSec >= lastBucketTime-safetyGapSec {
-					return false
-				}
-				if idx == dq.bucketsLast[0] {
-					return false
-				}
-			}
+		// Only basic protection: don't clean the current active bucket
+		if dq.bucketsLast[0] != -1 && idx == dq.bucketsLast[0] {
+			return false
 		}
 
-		fmt.Println("cleanup bucket ", idx)
+		// Debug (remove later)
+		// fmt.Println("cleanup bucket ", idx, "time=", b.TimeSec)
 
-		// Move pointer for next call
 		dq.nextCleanupIdx = idx + 1
 
-		// Process all remaining jobs → DLQ
+		// Move remaining jobs to DLQ
 		for j := max(b.Head+1, 0); j < b.Tail; j++ {
 			jobRef := b.Jobs[j]
 			if jobRef.Index >= 0 {
-				job := dq.jobStore.Get(uint32(jobRef.Index))
-				if job != nil && !job.Done {
+				if job := dq.jobStore.Get(uint32(jobRef.Index)); job != nil && !job.Done {
 					payloadSize := int64(len(job.Data))
 					dq.dlqBuffer.Add(jobRef, payloadSize, job.Done)
 				}
@@ -345,7 +331,7 @@ func (dq *DispatchQueue) CleanupOneExpiredBucket() bool {
 		return true
 	}
 
-	// Scan from last position
+	// Scan
 	for i := startIdx; i < len(dq.buckets); i++ {
 		if processBucket(i, &dq.buckets[i]) {
 			return true
@@ -359,7 +345,6 @@ func (dq *DispatchQueue) CleanupOneExpiredBucket() bool {
 		}
 	}
 
-	// No expired buckets found
 	dq.nextCleanupIdx = 0
 	return false
 }

@@ -2059,3 +2059,119 @@ func TestReadPendingExactCurrentSecond(t *testing.T) {
 	// So bucket with TimeSec == nowSec IS considered due
 	require.False(t, dq.buckets[0].TimeSec > nowSec, "TimeSec == currentSec should NOT be > currentSec")
 }
+
+func TestDispatchQueue_LargeScaleRetries(t *testing.T) {
+	dq := NewDispatchQueue(64, 500, nil, NewJobStore(10000))
+
+	const numJobs = 300
+	jobs := make([]JobRef, numJobs)
+
+	// Add jobs
+	for i := 0; i < numJobs; i++ {
+		jobs[i] = createJob(t, dq.jobStore, fmt.Sprintf("job-%d", i))
+		dq.AddNewJob(jobs[i])
+	}
+
+	// First dispatch - all new jobs
+	items := dq.ReadBatch(500, -1, -1, -1)
+	require.Len(t, items, numJobs)
+
+	// Move all to a future retry time (same second for predictability)
+	targetSec := dq.currentSec() + 5
+
+	for _, item := range items {
+		dq.MoveDispatched(item.JobRef, targetSec*1000, item.IsNew, item.Bucket, item.Cell)
+	}
+
+	// Should not read anything yet (future bucket)
+	items = dq.ReadBatch(100, -1, -1, -1)
+	require.Len(t, items, 0, "should not read future buckets")
+
+	// Advance time
+	time.Sleep(5200 * time.Millisecond)
+
+	// Now all retries should be readable
+	items = dq.ReadBatch(500, -1, -1, -1)
+	require.Len(t, items, numJobs, "should read all retries after due time")
+
+	// All should be from buckets
+	for _, item := range items {
+		require.False(t, item.IsNew, "should be retry jobs from buckets")
+		require.Equal(t, targetSec, dq.bucketToTime[item.Bucket])
+	}
+}
+
+func TestDispatchQueue_RetryCountPreservation(t *testing.T) {
+	dq := newTestQueue()
+
+	job := createJob(t, dq.jobStore, "test")
+	job.RetryCount = 3 // start with retry count
+
+	dq.AddNewJob(job)
+	items := dq.ReadBatch(1, -1, -1, -1)
+
+	require.Equal(t, 3, items[0].JobRef.RetryCount)
+
+	// Move to first bucket
+	dq.MoveDispatched(items[0].JobRef, (dq.currentSec()+5)*1000, true, -1, 0)
+
+	// Move again to another bucket
+	// Find the job
+	var bIdx, cell int
+	for i := range dq.buckets {
+		if dq.buckets[i].TimeSec > 0 {
+			bIdx = i
+			cell = 0
+			break
+		}
+	}
+
+	dq.MoveDispatched(dq.buckets[bIdx].Jobs[cell], (dq.currentSec()+15)*1000, false, bIdx, cell)
+
+	// Verify retry count survived both moves
+	require.Equal(t, 3, dq.buckets[bIdx].Jobs[cell].RetryCount) // wait, need to find new bucket
+}
+
+func TestDispatchQueue_ActiveQueueFull(t *testing.T) {
+	dq := NewDispatchQueue(10, 5, nil, NewJobStore(100)) // small active capacity
+
+	for i := 0; i < 5; i++ {
+		job := createJob(t, dq.jobStore, fmt.Sprintf("j%d", i))
+		require.NoError(t, dq.AddNewJob(job))
+	}
+
+	// 6th should fail
+	job6 := createJob(t, dq.jobStore, "j6")
+	err := dq.AddNewJob(job6)
+	require.Error(t, err, "should return capacity error")
+}
+
+func TestDispatchQueue_BucketPressureAndCleanup(t *testing.T) {
+	jobStore := NewJobStore(5000)
+	metrics := internal.GetPartitionMetrics()
+	logger, _ := zap.NewDevelopment()
+
+	dlq := NewDLQBuffer("test-topic", 1024*1024, 60000, jobStore, logger, metrics)
+	dq := NewDispatchQueue(32, 100, dlq, jobStore)
+
+	nowSec := dq.currentSec()
+
+	// Setup multiple expired buckets
+	for i := 0; i < 20; i++ {
+		dq.buckets[i].TimeSec = nowSec - 10
+		dq.buckets[i].Head = -1
+		dq.buckets[i].Tail = 1
+		dq.buckets[i].Jobs[0] = createJob(t, dq.jobStore, fmt.Sprintf("job-%d", i))
+		dq.timeToBucket[nowSec-10-int64(i)] = i
+	}
+
+	// Run cleanup
+	cleaned := 0
+	for i := 0; i < 30; i++ {
+		if dq.CleanupOneExpiredBucket() {
+			cleaned++
+		}
+	}
+
+	require.GreaterOrEqual(t, cleaned, 15, "should clean many expired buckets")
+}

@@ -26,7 +26,6 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /cue .
 
 # Stage 2: Runtime
-# Stage 2: Runtime
 FROM alpine:latest
 
 # Install ca-certificates and tzdata (already in Alpine's package repo)
