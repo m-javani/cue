@@ -56,7 +56,6 @@ tls_verifier:
 api:
   timeout_seconds: 30
 partition:
-  retry_base_delay_ms: 1000
 `
 }
 
@@ -219,7 +218,6 @@ func TestValidateAggregatedErrors(t *testing.T) {
 			PartitionTickMs:     100,
 			ProxyCleanupTickSec: 30,
 			HeartbeatTickMs:     1000,
-			RetryBaseDelayMs:    1000,
 		},
 	}
 
@@ -520,8 +518,7 @@ func TestDefaults(t *testing.T) {
 		"logging.output_path":             "stdout",
 		"partition.active_queue_capacity": 500000,
 		"partition.max_retries":           5,
-		"partition.retry_base_delay_ms":   1000,
-		"partition.max_backoff_ms":        60000,
+		"partition.max_backoff_sec":       6,
 		"partition.dispatch_batch_size":   128,
 		"partition.dlq_max_bytes":         DefaultDLQMaxSizeBytes,
 		"partition.dlq_max_age_ms":        24 * 60 * 60 * 1000,

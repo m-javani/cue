@@ -369,7 +369,7 @@ func TestFindOrCreateBucketReusesExpiredBucket(t *testing.T) {
 
 	newSec := nowSec + 100
 
-	idx := dq.findOrCreateBucket(newSec)
+	idx := dq.getBucketForTime(newSec)
 
 	if idx != 0 {
 		t.Fatalf("expected bucket 0 to be reused, got %d", idx)
@@ -402,7 +402,7 @@ func TestFindOrCreateBucketPanicsWhenNoBucketsAvailable(t *testing.T) {
 		}
 	}()
 
-	dq.findOrCreateBucket(nowSec + 1000)
+	dq.getBucketForTime(nowSec + 1000)
 }
 
 func TestMoveDispatchedPanicsForPastTime(t *testing.T) {

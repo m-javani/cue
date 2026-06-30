@@ -38,7 +38,7 @@ func BenchmarkPartition(b *testing.B) {
 
 func benchmarkPartition(b *testing.B, numJobs int) {
 	// Create config with large capacity
-	config := state.DefaultPartitionConfig()
+	config := state.DefaultTestPartitionConfig()
 	config.DispatchBatchSize = 1024
 	config.ActiveQueueCapacity = 100000
 

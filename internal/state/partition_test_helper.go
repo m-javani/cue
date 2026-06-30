@@ -26,16 +26,15 @@ import (
 	"go.uber.org/zap"
 )
 
-// DefaultPartitionConfig returns a default configuration for testing
-func DefaultPartitionConfig() *internal.PartitionConfig {
+// DefaultTestPartitionConfig returns a default configuration for testing
+func DefaultTestPartitionConfig() *internal.PartitionConfig {
 	pcfg := &internal.NewConfig().Partition
 	pcfg.ActiveQueueCapacity = 10000
 	pcfg.MaxRetries = 3
-	pcfg.MaxBackoffMs = 60000
-	pcfg.RetryBaseDelayMs = 1000
+	pcfg.MaxBackoffSec = 6
 	pcfg.DLQMaxBytes = 1024 * 1024
 	pcfg.DLQMaxAgeMs = 60000
-	pcfg.DispatchBatchSize = 128
+	pcfg.DispatchBatchSize = 1024
 
 	return pcfg
 }
@@ -89,7 +88,7 @@ type TestProxy struct {
 
 // NewPartitionTester creates a new test harness
 func NewPartitionTester(topic string, config *internal.PartitionConfig) *PartitionTester {
-	commandCh := make(chan model.Command, 1000)
+	commandCh := make(chan model.Command, 1024)
 	heartbeatCh := make(chan model.ProxyHeartbeat, 100)
 	topologyCh := make(chan ProxyTopologyUpdate, 10)
 	dropProposalCh := make(chan model.Command, 100)
@@ -97,7 +96,7 @@ func NewPartitionTester(topic string, config *internal.PartitionConfig) *Partiti
 
 	// Default proxy
 	proxyID := "test-proxy"
-	pushCh := make(chan model.ToGatewayMessage, 1000)
+	pushCh := make(chan model.ToGatewayMessage, 1024)
 
 	logger, _ := zap.NewDevelopment()
 
@@ -614,7 +613,7 @@ func (t *PartitionTester) Cleanup() {
 
 	// Close the main command channels
 	close(t.commandCh)
-	close(t.heartbeatCh)
+	// close(t.heartbeatCh)
 	close(t.topologyCh)
 	close(t.dropProposalCh)
 

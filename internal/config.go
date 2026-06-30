@@ -97,9 +97,8 @@ type LoggingConfig struct {
 // PartitionConfig
 type PartitionConfig struct {
 	ActiveQueueCapacity int   `mapstructure:"active_queue_capacity"`
-	RetryBaseDelayMs    int64 `mapstructure:"retry_base_delay_ms"`
 	MaxRetries          int   `mapstructure:"max_retries"`
-	MaxBackoffMs        int64 `mapstructure:"max_backoff_ms"`
+	MaxBackoffSec       int64 `mapstructure:"max_backoff_sec"`
 	DispatchBatchSize   int   `mapstructure:"dispatch_batch_size"`
 	DLQMaxBytes         int64 `mapstructure:"dlq_max_bytes"`
 	DLQMaxAgeMs         int64 `mapstructure:"dlq_max_age_ms"`
@@ -227,8 +226,7 @@ func setDefaults() {
 
 	viper.SetDefault("partition.active_queue_capacity", 500000) // Hard to fill, protected by min in code
 	viper.SetDefault("partition.max_retries", 5)
-	viper.SetDefault("partition.retry_base_delay_ms", 1000)
-	viper.SetDefault("partition.max_backoff_ms", 60000)
+	viper.SetDefault("partition.max_backoff_sec", 6)
 	viper.SetDefault("partition.dispatch_batch_size", 128)
 	viper.SetDefault("partition.dlq_max_bytes", DefaultDLQMaxSizeBytes)
 	viper.SetDefault("partition.dlq_max_age_ms", 24*60*60*1000) // 24 hours

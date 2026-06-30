@@ -89,13 +89,16 @@ func NewPartition(
 	config *internal.PartitionConfig,
 	stopCh chan struct{},
 ) *Partition {
-	jobStoreCapacity := config.ActiveQueueCapacity + (int(max(config.MaxBackoffMs, 1000)/1000) * config.MaxRetries)
 	metrics := internal.GetPartitionMetrics()
+
+	numBuckets, bucketCap := calculateQueueSizing(config)
+
+	jobStoreCapacity := config.ActiveQueueCapacity +
+		(int(config.MaxBackoffSec) * config.MaxRetries * 3)
+
 	jobStore := NewJobStore(jobStoreCapacity)
 	dlqBuffer := NewDLQBuffer(topic, config.DLQMaxBytes, config.DLQMaxAgeMs, jobStore, logger, metrics)
-
-	numBuckets := config.MaxRetries*int(config.MaxBackoffMs/1000) + 10
-	dispatchQueue := NewDispatchQueue(numBuckets, config.ActiveQueueCapacity, dlqBuffer, jobStore)
+	dispatchQueue := NewDispatchQueue(numBuckets, bucketCap, dlqBuffer, jobStore)
 
 	return &Partition{
 		topic:          topic,
@@ -118,6 +121,25 @@ func NewPartition(
 		stopCh:        stopCh,
 		dispatchItems: make([]dispatchItem, 0, config.DispatchBatchSize),
 	}
+}
+
+// calculateQueueSizing returns optimal sizes for DispatchQueue based on config
+func calculateQueueSizing(config *internal.PartitionConfig) (numBuckets int, bucketCap int) {
+	maxBackoffSec := max(config.MaxBackoffSec, 1)
+
+	// Worst-case time window: current second + max backoff + all retries at max delay
+	maxTimeWindowSec := 1 + maxBackoffSec + (maxBackoffSec * int64(config.MaxRetries))
+
+	// Number of buckets with good safety margin (~1.6x)
+	// 1.6x safety + extra buffer
+	// Ensure reasonable minimum
+	numBuckets = max(int(maxTimeWindowSec*16/10)+30, 120)
+
+	// Worst-case pile-up: all active jobs retrying into same bucket
+	// Minimum bucket size
+	bucketCap = max(config.ActiveQueueCapacity*(1+config.MaxRetries), 65536)
+
+	return numBuckets, bucketCap
 }
 
 // Run starts the partition main loop
@@ -381,22 +403,42 @@ func (p *Partition) handleHeartbeat(hb model.ProxyHeartbeat) {
 	p.proxyMap.Update(hb.ProxyID, hb.ConsumptionScore, hb.Timestamp)
 }
 
-// Inside processRetryableJobs, when re-queuing after timeout
+// CalculateRetryDelay returns delay in milliseconds for the next retry.
+// Uses mildly increasing delays. Minimum 1 second.
 func (p *Partition) CalculateRetryDelay(retryCount int) int64 {
-	base := int64(p.Config.RetryBaseDelayMs)
-
-	// Milder backoff: 1s → 2s → 4s → 8s → 16s → 30s → 60s cap
-	// power of 2
-	delay := min(base<<uint(retryCount), p.Config.MaxBackoffMs)
-
-	// Add small jitter to avoid thundering herd
-	jitter := delay / 10 // ±10%
-	if jitter > 0 {
-		// Simple jitter
-		delay += (time.Now().UnixNano() % (jitter * 2)) - jitter
+	if retryCount <= 0 {
+		return 1000
 	}
 
-	return delay
+	var delayMs int64
+
+	switch retryCount {
+	case 1:
+		delayMs = 3000
+	case 2:
+		delayMs = 6000
+	case 3:
+		delayMs = 10000
+	case 4:
+		delayMs = 15000
+	default: // retry 5 and above
+		delayMs = 20000
+	}
+
+	// Respect MaxBackoffSec
+	if p.Config.MaxBackoffSec > 0 {
+		maxMs := int64(p.Config.MaxBackoffSec) * 1000
+		if delayMs > maxMs {
+			delayMs = maxMs
+		}
+	}
+
+	// Enforce minimum 1 second
+	if delayMs < 1000 {
+		delayMs = 1000
+	}
+
+	return delayMs
 }
 
 func (p *Partition) sendToDLQ(jobRef JobRef, job *model.Job) {
@@ -445,7 +487,7 @@ func (p *Partition) dispatch() {
 	// But respect channel capacity and config max
 	batchSize := min(totalBatch, chCapacity)
 
-	// Also cap by a global max to prevent overwhelming
+	// cap by a global max to prevent overwhelming
 	const maxTotalBatch = 4096
 	if batchSize > maxTotalBatch {
 		batchSize = maxTotalBatch
@@ -453,7 +495,6 @@ func (p *Partition) dispatch() {
 
 	// Read batch - queue manages internal cursor state
 	items := p.dispatchQueue.ReadBatch(batchSize, -1, -1, -1)
-
 	if len(items) == 0 {
 		p.metrics.SetActiveDepth(p.topic, uint32(p.dispatchQueue.ActiveQueueSize()))
 		return
@@ -464,14 +505,18 @@ func (p *Partition) dispatch() {
 	jobSlice = jobSlice[:0]
 	validItems := make([]dispatchItem, 0, len(items))
 
+	dl := 0
+	nl := 0
 	for _, item := range items {
 		job := p.jobStore.Get(uint32(item.JobRef.Index))
 		if job == nil || job.Done {
+			nl += 1
 			p.dispatchQueue.RemoveByIndex(item.IsNew, item.Bucket, item.Cell)
 			continue
 		}
 
 		if item.JobRef.RetryCount >= p.Config.MaxRetries {
+			dl += 1
 			p.sendToDLQ(item.JobRef, job)
 			p.dispatchQueue.RemoveByIndex(item.IsNew, item.Bucket, item.Cell)
 			p.metrics.JobDLQ(p.topic, 1)
