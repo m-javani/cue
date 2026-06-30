@@ -4,7 +4,7 @@
 BINARY=cue
 
 # Build directory
-BUILD_DIR=.
+BUILD_DIR=./build
 
 # Version and tag
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -117,7 +117,7 @@ clean:
 	@echo "Cleaning..."
 	@rm -rf ./certs
 	@rm -f coverage.unit.cov coverage.html
-	@rm -f $(BINARY)
+	@rm -f $(BUILD_DIR)/$(BINARY)
 	@go clean -testcache
 	@echo "Clean complete"
 
