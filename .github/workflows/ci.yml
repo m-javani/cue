@@ -57,10 +57,9 @@ jobs:
         run: make test
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@v5
         with:
-          files: ./coverage.unit.cov
-          flags: unittests
+          files: coverage.unit.cov
           fail_ci_if_error: false
 
   build:
