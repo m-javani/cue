@@ -267,6 +267,8 @@ func (c *Config) Validate() error {
 		errs = append(errs, "internal error: partition.heartbeat_tick_ms not set")
 	}
 
+	c.Partition.MaxRetries = min(max(c.Partition.MaxRetries, 1), 10)
+
 	// Validate address resolver
 	validResolvers := map[string]bool{
 		"service": true,

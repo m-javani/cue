@@ -168,9 +168,3 @@ func (js *JobStore) GetIndexByID(jobID string) (uint32, bool) {
 	idx, exists := js.byID[jobID]
 	return idx, exists
 }
-
-// JobRef - compact reference used in queues
-type JobRef struct {
-	Index      int
-	RetryCount int
-}

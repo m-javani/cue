@@ -15,7 +15,6 @@
 package state
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,11 +29,28 @@ import (
 // Global Pools (shared across all partitions)
 // =============================================================================
 
-var jobSlicePool = sync.Pool{
-	New: func() any {
-		return make([]*model.Job, 0, 32)
-	},
-}
+var (
+	jobSlicePool = sync.Pool{
+		New: func() any {
+			return make([]*model.Job, 0, 4096)
+		},
+	}
+	batchPool = sync.Pool{
+		New: func() any {
+			return make([]JobRef, 0, 4096)
+		},
+	}
+	validRefsPool = sync.Pool{
+		New: func() any {
+			return make([]JobRef, 0, 4096)
+		},
+	}
+	removeRefsPool = sync.Pool{
+		New: func() any {
+			return make([]JobRef, 0, 4096)
+		},
+	}
+)
 
 // DropProposal is sent to cluster agent for DLQ persistence
 type DropProposal struct {
@@ -60,8 +76,8 @@ type Partition struct {
 	Config         *internal.PartitionConfig
 
 	// Core data structures
-	jobStore      *JobStore
-	dispatchQueue *DispatchQueue
+	jobStore     *JobStore
+	processQueue *ProcessQueue
 
 	proxyMap  *ProxyMap
 	dlqBuffer *DLQBuffer
@@ -71,10 +87,6 @@ type Partition struct {
 
 	proxyPushChs map[string]chan model.ToGatewayMessage // (local copy)
 	proxyPushMu  sync.RWMutex
-
-	dispatchItems []dispatchItem
-
-	lastCleanup time.Time
 }
 
 // NewPartition creates a new partition instance
@@ -91,14 +103,10 @@ func NewPartition(
 ) *Partition {
 	metrics := internal.GetPartitionMetrics()
 
-	numBuckets, bucketCap := calculateQueueSizing(config)
-
-	jobStoreCapacity := config.ActiveQueueCapacity +
-		(int(config.MaxBackoffSec) * config.MaxRetries * 3)
-
+	jobStoreCapacity := config.ActiveQueueCapacity + (int(config.MaxBackoffSec) * config.MaxRetries)
 	jobStore := NewJobStore(jobStoreCapacity)
 	dlqBuffer := NewDLQBuffer(topic, config.DLQMaxBytes, config.DLQMaxAgeMs, jobStore, logger, metrics)
-	dispatchQueue := NewDispatchQueue(numBuckets, bucketCap, dlqBuffer, jobStore)
+	processQueue := NewProcessQueue(config.ActiveQueueCapacity)
 
 	return &Partition{
 		topic:          topic,
@@ -111,35 +119,15 @@ func NewPartition(
 		logger:         logger,
 		Config:         config,
 
-		jobStore:      jobStore,
-		dispatchQueue: dispatchQueue,
-		proxyMap:      NewProxyMap(),
-		dlqBuffer:     dlqBuffer,
+		jobStore:     jobStore,
+		processQueue: processQueue,
+		proxyMap:     NewProxyMap(),
+		dlqBuffer:    dlqBuffer,
 
 		proxyPushChs: make(map[string]chan model.ToGatewayMessage),
 
-		stopCh:        stopCh,
-		dispatchItems: make([]dispatchItem, 0, config.DispatchBatchSize),
+		stopCh: stopCh,
 	}
-}
-
-// calculateQueueSizing returns optimal sizes for DispatchQueue based on config
-func calculateQueueSizing(config *internal.PartitionConfig) (numBuckets int, bucketCap int) {
-	maxBackoffSec := max(config.MaxBackoffSec, 1)
-
-	// Worst-case time window: current second + max backoff + all retries at max delay
-	maxTimeWindowSec := 1 + maxBackoffSec + (maxBackoffSec * int64(config.MaxRetries))
-
-	// Number of buckets with good safety margin (~1.6x)
-	// 1.6x safety + extra buffer
-	// Ensure reasonable minimum
-	numBuckets = max(int(maxTimeWindowSec*16/10)+30, 120)
-
-	// Worst-case pile-up: all active jobs retrying into same bucket
-	// Minimum bucket size
-	bucketCap = max(config.ActiveQueueCapacity*(1+config.MaxRetries), 65536)
-
-	return numBuckets, bucketCap
 }
 
 // Run starts the partition main loop
@@ -180,7 +168,6 @@ func (p *Partition) Run() {
 		case <-ticker.C:
 			// Everything that needs periodic checking
 			p.dispatch()
-			p.cleanupDispatchQueue()
 			p.flushDLQIfNeeded()
 		}
 	}
@@ -199,24 +186,6 @@ func (p *Partition) HandleTopologyUpdate(update ProxyTopologyUpdate) {
 	case "remove":
 		delete(p.proxyPushChs, update.ProxyID)
 	}
-}
-
-// getJobSlice gets a slice from the pool
-func (p *Partition) getJobSlice() []*model.Job {
-	return jobSlicePool.Get().([]*model.Job)[:0]
-}
-
-// putJobSlice returns the slice to the pool
-func (p *Partition) putJobSlice(s []*model.Job) {
-	if s == nil {
-		return
-	}
-	// prevent extremely large slices from polluting the pool
-	if cap(s) > 512 {
-		return // let it be GC'd
-	}
-	//nolint:staticcheck // SA6002 doesn't apply to []*model.Job
-	jobSlicePool.Put(s[:0])
 }
 
 // handleCommand processes incoming commands
@@ -292,15 +261,19 @@ func (p *Partition) handleAddJob(cmd model.Command) {
 	}
 
 	// Push to DispatchQueue
-	jobRef := JobRef{Index: int(idx), RetryCount: 0}
-	if err := p.dispatchQueue.AddNewJob(jobRef); err != nil {
+	dispatchRef := JobRef{
+		Index:      int(idx),
+		RetryCount: 0,
+		DueTimeSec: p.processQueue.currentSec(),
+	}
+	if err := p.processQueue.AddNewJob(dispatchRef); err != nil {
 		// DispatchQueue is full - release job and return error
 		p.jobStore.Release(idx)
 		if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
 			res := model.ToProducerResponse{
 				RequestID: cmd.RespInfo.RequestID,
 				Status:    model.ToProxyRespStatusError,
-				Error:     fmt.Sprintf("que is full, p.dispatchQueue.aHead: %d, p.dispatchQueue.aTail:%d, len(dq.active):%d", p.dispatchQueue.aHead, p.dispatchQueue.aTail, len(p.dispatchQueue.active)), //internal.ErrQueueFull.Error(),
+				Error:     "que is full",
 			}
 			select {
 			case cmd.RespInfo.RespCh <- res:
@@ -324,7 +297,7 @@ func (p *Partition) handleAddJob(cmd model.Command) {
 	}
 
 	p.metrics.JobAdded(p.topic, 1)
-	p.metrics.SetActiveDepth(p.topic, uint32(p.dispatchQueue.ActiveQueueSize()))
+	p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 }
 
 func (p *Partition) handleDone(cmd model.Command) {
@@ -403,42 +376,41 @@ func (p *Partition) handleHeartbeat(hb model.ProxyHeartbeat) {
 	p.proxyMap.Update(hb.ProxyID, hb.ConsumptionScore, hb.Timestamp)
 }
 
-// CalculateRetryDelay returns delay in milliseconds for the next retry.
+// CalculateRetryDelaySec returns delay in milliseconds for the next retry.
 // Uses mildly increasing delays. Minimum 1 second.
-func (p *Partition) CalculateRetryDelay(retryCount int) int64 {
+func (p *Partition) CalculateRetryDelaySec(retryCount int) int64 {
 	if retryCount <= 0 {
-		return 1000
+		return 1
 	}
 
-	var delayMs int64
+	var delaySec int64
 
 	switch retryCount {
 	case 1:
-		delayMs = 3000
+		delaySec = 3
 	case 2:
-		delayMs = 6000
+		delaySec = 6
 	case 3:
-		delayMs = 10000
+		delaySec = 10
 	case 4:
-		delayMs = 15000
+		delaySec = 15
 	default: // retry 5 and above
-		delayMs = 20000
+		delaySec = 20
 	}
 
 	// Respect MaxBackoffSec
 	if p.Config.MaxBackoffSec > 0 {
-		maxMs := int64(p.Config.MaxBackoffSec) * 1000
-		if delayMs > maxMs {
-			delayMs = maxMs
+		if delaySec > p.Config.MaxBackoffSec {
+			delaySec = p.Config.MaxBackoffSec
 		}
 	}
 
 	// Enforce minimum 1 second
-	if delayMs < 1000 {
-		delayMs = 1000
+	if delaySec < 1 {
+		delaySec = 1
 	}
 
-	return delayMs
+	return delaySec
 }
 
 func (p *Partition) sendToDLQ(jobRef JobRef, job *model.Job) {
@@ -453,14 +425,10 @@ func (p *Partition) sendToDLQ(jobRef JobRef, job *model.Job) {
 // It processes due jobs in order: Done → Expired/MaxRetries → Send to proxy
 // dispatch sends jobs to available proxies and handles job lifecycle
 func (p *Partition) dispatch() {
-	if p.getStatus() != model.NodeStatusLeaderActive {
-		return
-	}
-	if len(p.proxyMap.available) == 0 {
+	if p.getStatus() != model.NodeStatusLeaderActive || len(p.proxyMap.available) == 0 {
 		return
 	}
 
-	// Select one proxy
 	proxyID, consumerCount, ok := p.proxyMap.GetNextAvailable()
 	if !ok || consumerCount <= 0 {
 		return
@@ -473,111 +441,123 @@ func (p *Partition) dispatch() {
 		return
 	}
 
-	// Channel capacity
 	chCapacity := cap(pushCh) - len(pushCh)
 	if chCapacity <= 0 {
 		return
 	}
 
-	// Each consumer can handle jobsPerConsumer in this cycle
-	// Total batch = consumers * jobs per consumer
-	jobsPerConsumer := p.Config.DispatchBatchSize // e.g., 128, 256, 1024
-	totalBatch := consumerCount * jobsPerConsumer
-
-	// But respect channel capacity and config max
-	batchSize := min(totalBatch, chCapacity)
-
-	// cap by a global max to prevent overwhelming
-	const maxTotalBatch = 4096
-	if batchSize > maxTotalBatch {
-		batchSize = maxTotalBatch
+	batchSize := min(consumerCount*p.Config.DispatchBatchSize, chCapacity)
+	if batchSize > 4096 {
+		batchSize = 4096
 	}
 
-	// Read batch - queue manages internal cursor state
-	items := p.dispatchQueue.ReadBatch(batchSize, -1, -1, -1)
+	// Read ready jobs
+	nowSec := time.Now().Unix()
+	items := p.processQueue.ReadBatch(batchSize, nowSec, &batchPool)
 	if len(items) == 0 {
-		p.metrics.SetActiveDepth(p.topic, uint32(p.dispatchQueue.ActiveQueueSize()))
+		p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 		return
 	}
 
-	// Filter and prepare jobs
-	jobSlice := p.getJobSlice()
-	jobSlice = jobSlice[:0]
-	validItems := make([]dispatchItem, 0, len(items))
+	// Classification
+	jobSlice := jobSlicePool.Get().([]*model.Job)[:0]
+	validRefs := validRefsPool.Get().([]JobRef)[:0]
+	removeCells := removeRefsPool.Get().([]JobRef)[:0]
 
-	dl := 0
-	nl := 0
 	for _, item := range items {
-		job := p.jobStore.Get(uint32(item.JobRef.Index))
+		job := p.jobStore.Get(uint32(item.Index))
 		if job == nil || job.Done {
-			nl += 1
-			p.dispatchQueue.RemoveByIndex(item.IsNew, item.Bucket, item.Cell)
+			removeCells = append(removeCells, item)
 			continue
 		}
 
-		if item.JobRef.RetryCount >= p.Config.MaxRetries {
-			dl += 1
-			p.sendToDLQ(item.JobRef, job)
-			p.dispatchQueue.RemoveByIndex(item.IsNew, item.Bucket, item.Cell)
+		if item.RetryCount >= p.Config.MaxRetries {
+			p.sendToDLQ(item, job)
 			p.metrics.JobDLQ(p.topic, 1)
+			removeCells = append(removeCells, item)
 			continue
 		}
 
 		jobSlice = append(jobSlice, job)
-		validItems = append(validItems, item)
+		validRefs = append(validRefs, item)
 	}
 
 	if len(jobSlice) == 0 {
-		p.putJobSlice(jobSlice)
-		p.metrics.SetActiveDepth(p.topic, uint32(p.dispatchQueue.ActiveQueueSize()))
+		//nolint:staticcheck
+		batchPool.Put(items[:0])
+		//nolint:staticcheck
+		jobSlicePool.Put(jobSlice[:0])
+		//nolint:staticcheck
+		validRefsPool.Put(validRefs[:0])
+		// we still need to remove from queue if any removable jobref appended
+		p.processQueue.RemoveCells(removeCells)
+		//nolint:staticcheck
+		removeRefsPool.Put(removeCells[:0])
+		p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 		return
 	}
 
 	// Send to proxy
-	proxyMsg := model.ToProxyMessage{
+	data, err := msgpack.Marshal(model.ToProxyMessage{
 		Type: model.ProxyMessageOutbound,
 		Outbound: &model.ToConsumerMessage{
 			Topic:   p.topic,
 			ProxyID: proxyID,
 			Jobs:    jobSlice,
 		},
-	}
-	data, err := msgpack.Marshal(proxyMsg)
+	})
+
 	if err != nil {
 		p.logger.Error("failed to marshal", zap.Error(err))
-		p.putJobSlice(jobSlice)
-		p.metrics.SetActiveDepth(p.topic, uint32(p.dispatchQueue.ActiveQueueSize()))
+		//nolint:staticcheck
+		batchPool.Put(items[:0])
+		//nolint:staticcheck
+		jobSlicePool.Put(jobSlice[:0])
+		//nolint:staticcheck
+		validRefsPool.Put(validRefs[:0])
+		// we still need to remove from queue if any removable jobref appended
+		p.processQueue.RemoveCells(removeCells)
+		//nolint:staticcheck
+		removeRefsPool.Put(removeCells[:0])
+		p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 		return
 	}
 
-	gatewayMsg := model.ToGatewayMessage{
+	sent := false
+	select {
+	case pushCh <- model.ToGatewayMessage{
 		Type:       model.ToGatewayMessageConsumer,
 		ToConsumer: data,
-	}
-
-	select {
-	case pushCh <- gatewayMsg:
-		now := nowMilli()
-		for _, item := range validItems {
-			item.JobRef.RetryCount++
-			delay := p.CalculateRetryDelay(item.JobRef.RetryCount)
-			retryTime := now + delay
-
-			p.dispatchQueue.MoveDispatched(
-				item.JobRef,
-				retryTime,
-				item.IsNew,
-				item.Bucket,
-				item.Cell,
-			)
-		}
-
+	}:
+		sent = true
 	default:
-		// Channel full - try next proxy next cycle
-		p.putJobSlice(jobSlice)
+		// channel full - retry next cycle
 	}
 
-	p.metrics.SetActiveDepth(p.topic, uint32(p.dispatchQueue.ActiveQueueSize()))
+	// Post-send processing
+	if sent {
+		for i := range validRefs {
+			ref := &validRefs[i]
+			ref.RetryCount++
+			delaySec := p.CalculateRetryDelaySec(ref.RetryCount)
+			p.processQueue.UpdateRetry(ref.Cell, ref.RetryCount, delaySec)
+		}
+	}
+
+	// Final cleanup - remove dead jobs
+	p.processQueue.RemoveCells(removeCells)
+
+	// Return pools
+	//nolint:staticcheck
+	batchPool.Put(items[:0])
+	//nolint:staticcheck
+	jobSlicePool.Put(jobSlice[:0])
+	//nolint:staticcheck
+	validRefsPool.Put(validRefs[:0])
+	//nolint:staticcheck
+	removeRefsPool.Put(removeCells[:0])
+
+	p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 }
 
 // flushDLQIfNeeded proposes drops when buffer thresholds are met
@@ -636,10 +616,10 @@ func nowMilli() int64 {
 
 func (p *Partition) broadcastPartitionHeartbeat() {
 	canAccept := true
-	dq := p.dispatchQueue
-	activeDepth := dq.ActiveQueueSize()
+	dq := p.processQueue
+	activeDepth := dq.ActiveSize()
 
-	if activeDepth > dq.bucketCap-dq.bucketCap/10 { // 10% breathing space
+	if activeDepth > cap(dq.records)-cap(dq.records)/10 { // 10% breathing space
 		canAccept = false
 	}
 
@@ -664,13 +644,4 @@ func (p *Partition) broadcastPartitionHeartbeat() {
 			// skip if busy
 		}
 	}
-}
-
-func (p *Partition) cleanupDispatchQueue() {
-	if time.Since(p.lastCleanup) < 1*time.Second {
-		return
-	}
-	p.lastCleanup = time.Now()
-	// Zero-allocation cleanup
-	p.dispatchQueue.CleanupOneExpiredBucket()
 }

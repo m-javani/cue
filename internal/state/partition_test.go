@@ -610,7 +610,7 @@ func TestR1_SingleRetryThenSuccess(t *testing.T) {
 		t.Fatal("job was not initially dispatched")
 	}
 
-	// Wait for first retry (should be ~1s later with jitter)
+	// Wait for first retry (should be ~1s later)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		_, _, dispatched, _, _ := tester.GetCounts()
@@ -3663,10 +3663,10 @@ func TestBroadcastPartitionHeartbeat_CanAcceptFalse(t *testing.T) {
 	// DO NOT send heartbeat - proxy is not available for dispatch
 
 	// Calculate the threshold: bucketCap - bucketCap/10 = 90% of capacity
-	dq := tester.partition.dispatchQueue
-	bucketCap := dq.bucketCap
-	threshold := bucketCap - bucketCap/10
-	t.Logf("bucketCap=%d, threshold=%d", bucketCap, threshold)
+	pq := tester.partition.processQueue
+	pqCap := cap(pq.records)
+	threshold := pqCap - pqCap/10
+	t.Logf("queueCap=%d, threshold=%d", pqCap, threshold)
 
 	// Add enough jobs to exceed the threshold
 	// Since there's no available proxy, jobs will stay in the queue
@@ -3680,7 +3680,7 @@ func TestBroadcastPartitionHeartbeat_CanAcceptFalse(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify the queue is above threshold
-	activeDepth := tester.partition.dispatchQueue.ActiveQueueSize()
+	activeDepth := tester.partition.processQueue.ActiveSize()
 	if activeDepth <= threshold {
 		t.Errorf("expected activeDepth > %d, got %d", threshold, activeDepth)
 	}
@@ -3701,11 +3701,11 @@ func TestBroadcastPartitionHeartbeat_CanAcceptFalse(t *testing.T) {
 				if msg.Heartbeat.CanAccept {
 					canAcceptTrueCount++
 					t.Logf("Received heartbeat: CanAccept=true, activeDepth=%d",
-						tester.partition.dispatchQueue.ActiveQueueSize())
+						tester.partition.processQueue.ActiveSize())
 				} else {
 					canAcceptFalseCount++
 					t.Logf("Received heartbeat: CanAccept=false, activeDepth=%d",
-						tester.partition.dispatchQueue.ActiveQueueSize())
+						tester.partition.processQueue.ActiveSize())
 				}
 			}
 		case <-timeout:
