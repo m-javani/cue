@@ -468,6 +468,9 @@ func (p *Partition) dispatch() {
 		job := p.jobStore.Get(uint32(item.Index))
 		if job == nil || job.Done {
 			removeCells = append(removeCells, item)
+			if job.Done {
+				p.metrics.JobCompleted(p.topic, 1)
+			}
 			continue
 		}
 
@@ -480,6 +483,9 @@ func (p *Partition) dispatch() {
 
 		jobSlice = append(jobSlice, job)
 		validRefs = append(validRefs, item)
+		if item.RetryCount > 0 {
+			p.metrics.JobRetried(p.topic, 1)
+		}
 	}
 
 	if len(jobSlice) == 0 {

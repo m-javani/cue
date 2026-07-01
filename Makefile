@@ -4,7 +4,7 @@
 BINARY=cue
 
 # Build directory
-BUILD_DIR=./build
+BUILD_DIR=.
 
 # Version and tag
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
