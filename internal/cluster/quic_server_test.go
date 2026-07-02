@@ -1024,3 +1024,185 @@ func TestQuicServer_GetConfigForClient(t *testing.T) {
 	// Verify listener still exists (not recreated)
 	assert.NotNil(t, node1.Server.quicListener)
 }
+
+// -----------------------------
+// invalid certs
+// -----------------------------
+// TestQuicServer_DifferentCA_ConnectionRejected tests that connections are rejected
+// when peers have certificates signed by different CAs
+func TestQuicServer_DifferentCA_ConnectionRejected(t *testing.T) {
+	// Create first helper with its own CA
+	h1 := newQUICTestHelper(t)
+	defer h1.close()
+
+	// Create second helper with its own CA (different from h1)
+	h2 := newQUICTestHelper(t)
+	defer h2.close()
+
+	// Create nodes with different CAs
+	node1 := h1.createNode("node1")
+	node2 := h2.createNode("node2")
+
+	// Start accepting on node2
+	h2.startAccepting(node2)
+
+	// Try to connect node1 (CA1) to node2 (CA2)
+	handshake := Handshake{
+		NodeID:           node1.ID,
+		TargetServerName: node2.ID + ".localhost",
+	}
+
+	ctx, cancel := context.WithTimeout(h1.ctx, 2*time.Second)
+	defer cancel()
+
+	err := node1.Server.Connect(
+		ctx,
+		uint64(node2.Port),
+		node2.Addr,
+		node2.ID+".localhost",
+		node2.ID,
+		handshake,
+	)
+
+	// Connection should be rejected due to CA mismatch
+	assert.Error(t, err, "connection should be rejected when CAs are different")
+	assert.Contains(t, err.Error(), "failed to decode peer handshake",
+		"error should indicate handshake failure")
+
+	// Verify no connection was established
+	outgoing := node1.Server.GetActiveOutgoingNodes()
+	assert.Empty(t, outgoing, "no outgoing connections should exist")
+
+	incoming := node2.Server.GetActiveIncomingNodes()
+	assert.Empty(t, incoming, "no incoming connections should exist")
+}
+
+// TestQuicServer_MultipleCAs_WithMixedTrust tests a scenario where some nodes
+// share CAs and others don't
+func TestQuicServer_MultipleCAs_WithMixedTrust(t *testing.T) {
+	// Create two helpers with different CAs
+	h1 := newQUICTestHelper(t)
+	defer h1.close()
+
+	h2 := newQUICTestHelper(t)
+	defer h2.close()
+
+	// Create node1 and node3 with CA1 (h1)
+	node1 := h1.createNode("node1")
+	node3 := h1.createNode("node3")
+
+	// Create node2 with CA2 (h2)
+	node2 := h2.createNode("node2")
+
+	// Start accepting on all nodes
+	h1.startAccepting(node1)
+	h1.startAccepting(node3)
+	h2.startAccepting(node2)
+
+	// Connection 1: node1 (CA1) to node3 (CA1) - SHOULD SUCCEED
+	err := h1.connectNodes(node1, node3)
+	require.NoError(t, err, "nodes with same CA should connect")
+
+	// Connection 2: node1 (CA1) to node2 (CA2) - SHOULD FAIL
+	handshake := Handshake{
+		NodeID:           node1.ID,
+		TargetServerName: node2.ID + ".localhost",
+	}
+
+	ctx, cancel := context.WithTimeout(h1.ctx, 2*time.Second)
+	defer cancel()
+
+	err = node1.Server.Connect(
+		ctx,
+		uint64(node2.Port),
+		node2.Addr,
+		node2.ID+".localhost",
+		node2.ID,
+		handshake,
+	)
+
+	assert.Error(t, err, "connection should be rejected when CAs are different")
+
+	// Wait a bit for connection states to settle
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify node1 connections
+	node1Outgoing := node1.Server.GetActiveOutgoingNodes()
+	assert.Contains(t, node1Outgoing, "node3", "node1 should be connected to node3")
+	assert.NotContains(t, node1Outgoing, "node2", "node1 should NOT be connected to node2")
+
+	// Verify node3 connections (should have node1)
+	node3Incoming := node3.Server.GetActiveIncomingNodes()
+	assert.Contains(t, node3Incoming, "node1", "node3 should have incoming from node1")
+
+	// Verify node2 has no connections
+	node2Incoming := node2.Server.GetActiveIncomingNodes()
+	assert.Empty(t, node2Incoming, "node2 should have no incoming connections")
+	node2Outgoing := node2.Server.GetActiveOutgoingNodes()
+	assert.Empty(t, node2Outgoing, "node2 should have no outgoing connections")
+}
+
+// TestQuicServer_CAVerifier_ChainValidation tests that the verifier properly
+// validates the entire certificate chain, not just the leaf certificate
+func TestQuicServer_CAVerifier_ChainValidation(t *testing.T) {
+	// Create helper with a CA
+	h := newQUICTestHelper(t)
+	defer h.close()
+
+	// Create node1 with the main CA
+	node1 := h.createNode("node1")
+
+	// Create a separate helper for the different CA
+	// This ensures proper CA file creation using the same pattern
+	h2 := newQUICTestHelper(t)
+	defer h2.close()
+
+	// Create node2 using h2's CA (which is different from h1's CA)
+	node2 := h2.createNode("node2")
+
+	// Start accepting on node2
+	h2.startAccepting(node2)
+
+	// Start accepting on node1 (though not strictly needed for outgoing connection)
+	h.startAccepting(node1)
+
+	// Small delay to ensure servers are ready
+	time.Sleep(100 * time.Millisecond)
+
+	// Try to connect node1 (CA from h1) to node2 (CA from h2) - SHOULD FAIL
+	handshake := Handshake{
+		NodeID:           node1.ID,
+		TargetServerName: node2.ID + ".localhost",
+	}
+
+	ctx, cancel := context.WithTimeout(h.ctx, 3*time.Second)
+	defer cancel()
+
+	err := node1.Server.Connect(
+		ctx,
+		uint64(node2.Port),
+		node2.Addr,
+		node2.ID+".localhost",
+		node2.ID,
+		handshake,
+	)
+
+	// The connection should fail due to CA mismatch
+	assert.Error(t, err, "connection should be rejected due to CA chain validation failure")
+
+	// The error might be various things, but it should indicate a failure
+	errorMsg := err.Error()
+	assert.True(t,
+		strings.Contains(errorMsg, "failed to decode peer handshake") ||
+			strings.Contains(errorMsg, "certificate signed by unknown authority") ||
+			strings.Contains(errorMsg, "x509: certificate signed by unknown authority") ||
+			strings.Contains(errorMsg, "tls: failed to verify certificate"),
+		"error should indicate CA validation failure, got: %v", err)
+
+	// Verify no connections established
+	node1Outgoing := node1.Server.GetActiveOutgoingNodes()
+	assert.Empty(t, node1Outgoing, "no outgoing connections should exist")
+
+	node2Incoming := node2.Server.GetActiveIncomingNodes()
+	assert.Empty(t, node2Incoming, "no incoming connections should exist")
+}
