@@ -14,8 +14,15 @@
 
 package verifier
 
+import "crypto/x509"
+
+type Identity struct {
+	NodeID     string
+	ServerName string
+}
+
 // PeerVerifier: Validates peer certificates during TLS handshake
 type TLSVerifier interface {
 	// VerifyPeer validates the peer's certificate for a given node ID
-	VerifyPeer(rawCerts [][]byte, nodeID string) error
+	VerifyPeer(cert *x509.Certificate, expected Identity) error
 }

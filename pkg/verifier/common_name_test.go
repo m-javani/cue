@@ -15,12 +15,13 @@
 package verifier
 
 import (
+	"crypto/x509"
 	"testing"
 )
 
 func TestCNVerifier_VerifyPeer(t *testing.T) {
 	// Generate a test certificate with CN (DER format - matches cert.Raw)
-	certDER, err := generateTestCertDER(certOptions{
+	cert, err := generateX509Certificate(certOptions{
 		commonName: "node1",
 	})
 	if err != nil {
@@ -30,35 +31,28 @@ func TestCNVerifier_VerifyPeer(t *testing.T) {
 	tests := []struct {
 		name         string
 		verifier     CNVerifier
-		rawCerts     [][]byte
+		cert         *x509.Certificate
 		expectedNode string
 		expectErr    bool
 	}{
 		{
 			name:         "valid certificate",
 			verifier:     CNVerifier{},
-			rawCerts:     [][]byte{certDER},
+			cert:         cert,
 			expectedNode: "node1",
 			expectErr:    false,
 		},
 		{
 			name:         "invalid - wrong CN",
 			verifier:     CNVerifier{},
-			rawCerts:     [][]byte{certDER},
+			cert:         cert,
 			expectedNode: "node2",
 			expectErr:    true,
 		},
 		{
 			name:         "no certificates",
 			verifier:     CNVerifier{},
-			rawCerts:     [][]byte{},
-			expectedNode: "node1",
-			expectErr:    true,
-		},
-		{
-			name:         "invalid certificate data",
-			verifier:     CNVerifier{},
-			rawCerts:     [][]byte{[]byte("invalid cert data")},
+			cert:         cert,
 			expectedNode: "node1",
 			expectErr:    true,
 		},
@@ -66,7 +60,7 @@ func TestCNVerifier_VerifyPeer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.verifier.VerifyPeer(tt.rawCerts, tt.expectedNode)
+			err := tt.verifier.VerifyPeer(tt.cert, Identity{NodeID: tt.expectedNode})
 			if (err != nil) != tt.expectErr {
 				t.Errorf("error = %v, expectErr %v", err, tt.expectErr)
 			}

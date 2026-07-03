@@ -324,10 +324,6 @@ func (s *ClusterQUIC) AcceptConnection(ctx context.Context) (string, *quic.Conn,
 		_ = conn.CloseWithError(0, "no client certificate")
 		return "", nil, fmt.Errorf("no client certificate")
 	}
-	rawCerts := make([][]byte, len(connState.TLS.PeerCertificates))
-	for i, cert := range connState.TLS.PeerCertificates {
-		rawCerts[i] = cert.Raw
-	}
 
 	nodeID, err := s.performHandshake(conn)
 	if err != nil {
@@ -338,7 +334,8 @@ func (s *ClusterQUIC) AcceptConnection(ctx context.Context) (string, *quic.Conn,
 
 	// Authorize: verify the certificate matches the claimed nodeID
 	if s.tlsVerifier != nil {
-		if err := s.tlsVerifier.VerifyPeer(rawCerts, nodeID); err != nil {
+		cert := connState.TLS.PeerCertificates[0]
+		if err := s.tlsVerifier.VerifyPeer(cert, verifier.Identity{NodeID: nodeID}); err != nil {
 			_ = conn.CloseWithError(0, "authorization failed")
 			s.metrics.ConnectionRejected()
 			return "", nil, fmt.Errorf("peer authorization failed: %w", err)
@@ -524,12 +521,25 @@ func (s *ClusterQUIC) Connect(ctx context.Context, port uint64, remoteAddr strin
 		// Disable Go's built-in verification so our custom verifier runs
 		tlsConfig.InsecureSkipVerify = true
 
-		tlsConfig.VerifyPeerCertificate = func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-			err := s.tlsVerifier.VerifyPeer(rawCerts, targetNodeID)
-			if err != nil {
-				s.logger.Warn("TLS verification error in connect:", zap.Error(err))
+		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("no peer certificate")
 			}
-			return err
+
+			cert := cs.PeerCertificates[0]
+
+			// verify chain
+			if _, err := cert.Verify(x509.VerifyOptions{
+				Roots: s.clientConfig.Load().RootCAs,
+			}); err != nil {
+				return err
+			}
+
+			// identity verification
+			return s.tlsVerifier.VerifyPeer(cert, verifier.Identity{
+				NodeID:     targetNodeID,
+				ServerName: targetServerName,
+			})
 		}
 	}
 

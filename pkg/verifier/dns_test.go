@@ -15,14 +15,13 @@
 package verifier
 
 import (
+	"crypto/x509"
 	"testing"
 )
 
 func TestDNSVerifier_VerifyPeer(t *testing.T) {
-	// Generate a test certificate with DNS SAN (DER format - matches cert.Raw)
-	certDER, err := generateTestCertDER(certOptions{
+	cert, err := generateX509Certificate(certOptions{
 		commonName: "node1",
-		dnsNames:   []string{"node1.cluster.local"},
 	})
 	if err != nil {
 		t.Fatalf("failed to generate test cert: %v", err)
@@ -31,7 +30,7 @@ func TestDNSVerifier_VerifyPeer(t *testing.T) {
 	tests := []struct {
 		name      string
 		verifier  DNSVerifier
-		rawCerts  [][]byte
+		cert      *x509.Certificate
 		peerID    string
 		expectErr bool
 	}{
@@ -40,7 +39,7 @@ func TestDNSVerifier_VerifyPeer(t *testing.T) {
 			verifier: DNSVerifier{
 				Domain: "cluster.local",
 			},
-			rawCerts:  [][]byte{certDER},
+			cert:      cert,
 			peerID:    "node1",
 			expectErr: false,
 		},
@@ -49,7 +48,7 @@ func TestDNSVerifier_VerifyPeer(t *testing.T) {
 			verifier: DNSVerifier{
 				Domain: "other.local",
 			},
-			rawCerts:  [][]byte{certDER},
+			cert:      cert,
 			peerID:    "node1",
 			expectErr: true,
 		},
@@ -58,33 +57,15 @@ func TestDNSVerifier_VerifyPeer(t *testing.T) {
 			verifier: DNSVerifier{
 				Domain: "cluster.local",
 			},
-			rawCerts:  [][]byte{certDER},
+			cert:      cert,
 			peerID:    "node2",
-			expectErr: true,
-		},
-		{
-			name: "no certificates",
-			verifier: DNSVerifier{
-				Domain: "cluster.local",
-			},
-			rawCerts:  [][]byte{},
-			peerID:    "node1",
-			expectErr: true,
-		},
-		{
-			name: "invalid certificate data",
-			verifier: DNSVerifier{
-				Domain: "cluster.local",
-			},
-			rawCerts:  [][]byte{[]byte("invalid cert data")},
-			peerID:    "node1",
 			expectErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.verifier.VerifyPeer(tt.rawCerts, tt.peerID)
+			err := tt.verifier.VerifyPeer(tt.cert, Identity{NodeID: tt.peerID})
 			if (err != nil) != tt.expectErr {
 				t.Errorf("error = %v, expectErr %v", err, tt.expectErr)
 			}

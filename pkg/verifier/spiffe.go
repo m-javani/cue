@@ -28,18 +28,9 @@ type SPIFFEVerifier struct {
 }
 
 // VerifyPeer validates that the certificate's SPIFFE ID matches the expected peer ID
-func (s SPIFFEVerifier) VerifyPeer(rawCerts [][]byte, peerID string) error {
-	if len(rawCerts) == 0 {
-		return fmt.Errorf("no certificates provided")
-	}
-
-	cert, err := x509.ParseCertificate(rawCerts[0])
-	if err != nil {
-		return fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
+func (s SPIFFEVerifier) VerifyPeer(cert *x509.Certificate, expected Identity) error {
 	// Expected SPIFFE ID: spiffe://<trust_domain>/<namespace>/<peerID>
-	expectedSpiffeID := fmt.Sprintf("spiffe://%s/%s/%s", s.TrustDomain, s.Namespace, peerID)
+	expectedSpiffeID := fmt.Sprintf("spiffe://%s/%s/%s", s.TrustDomain, s.Namespace, expected.NodeID)
 
 	// Check all URIs in the certificate for the expected SPIFFE ID
 	for _, uri := range cert.URIs {
@@ -50,7 +41,7 @@ func (s SPIFFEVerifier) VerifyPeer(rawCerts [][]byte, peerID string) error {
 
 	// DNS SAN fallback - but ONLY if the DNS name includes the namespace
 	// Format: <peerID>.<namespace>.<trust_domain>
-	expectedDNSName := fmt.Sprintf("%s.%s.%s", peerID, s.Namespace, s.TrustDomain)
+	expectedDNSName := fmt.Sprintf("%s.%s.%s", expected.NodeID, s.Namespace, s.TrustDomain)
 	for _, dnsName := range cert.DNSNames {
 		if dnsName == expectedDNSName {
 			return nil

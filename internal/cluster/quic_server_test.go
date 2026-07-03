@@ -1066,8 +1066,7 @@ func TestQuicServer_DifferentCA_ConnectionRejected(t *testing.T) {
 
 	// Connection should be rejected due to CA mismatch
 	assert.Error(t, err, "connection should be rejected when CAs are different")
-	assert.Contains(t, err.Error(), "failed to decode peer handshake",
-		"error should indicate handshake failure")
+	assert.Contains(t, err.Error(), "unknown authority")
 
 	// Verify no connection was established
 	outgoing := node1.Server.GetActiveOutgoingNodes()

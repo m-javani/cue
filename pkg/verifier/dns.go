@@ -22,16 +22,8 @@ type DNSVerifier struct {
 	Domain string // e.g., "cluster.local"
 }
 
-func (d DNSVerifier) VerifyPeer(rawCerts [][]byte, peerID string) error {
-	if len(rawCerts) == 0 {
-		return fmt.Errorf("no certificates provided")
-	}
+func (d DNSVerifier) VerifyPeer(cert *x509.Certificate, expected Identity) error {
 
-	cert, err := x509.ParseCertificate(rawCerts[0])
-	if err != nil {
-		return fmt.Errorf("failed to parse certificate: %w", err)
-	}
-
-	expectedName := fmt.Sprintf("%s.%s", peerID, d.Domain)
+	expectedName := fmt.Sprintf("%s.%s", expected.NodeID, d.Domain)
 	return cert.VerifyHostname(expectedName)
 }

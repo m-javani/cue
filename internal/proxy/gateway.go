@@ -901,10 +901,6 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 		_ = conn.CloseWithError(0, "no client certificate")
 		return
 	}
-	rawCerts := make([][]byte, len(connState.TLS.PeerCertificates))
-	for i, cert := range connState.TLS.PeerCertificates {
-		rawCerts[i] = cert.Raw
-	}
 
 	// Accept first stream for handshake
 	stream, err := conn.AcceptStream(handshakeCtx)
@@ -928,7 +924,8 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 
 	// Authorize: verify the certificate matches the claimed nodeID
 	if g.tlsVerifier != nil {
-		if err := g.tlsVerifier.VerifyPeer(rawCerts, handshake.ProxyID); err != nil {
+		cert := connState.TLS.PeerCertificates[0]
+		if err := g.tlsVerifier.VerifyPeer(cert, verifier.Identity{NodeID: handshake.ProxyID}); err != nil {
 			_ = conn.CloseWithError(0, "tls authorization failed")
 			return
 		}

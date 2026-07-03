@@ -25,15 +25,7 @@ import (
 	"time"
 )
 
-// generateTestCertDER creates a self-signed certificate and returns DER-encoded bytes
-// This matches what you get from cert.Raw in TLS connections
-func generateTestCertDER(opts certOptions) ([]byte, error) {
-	// Generate private key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, err
-	}
-
+func generateX509Certificate(opts certOptions) (*x509.Certificate, error) {
 	// Convert URI strings to url.URL objects
 	var uris []*url.URL
 	for _, uriStr := range opts.uris {
@@ -59,7 +51,22 @@ func generateTestCertDER(opts certOptions) ([]byte, error) {
 		BasicConstraintsValid: true,
 		IsCA:                  false,
 	}
+	return template, nil
+}
 
+// generateTestCertDER creates a self-signed certificate and returns DER-encoded bytes
+// This matches what you get from cert.Raw in TLS connections
+func generateTestCertDER(opts certOptions) ([]byte, error) {
+	// Generate private key
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, err
+	}
+
+	template, err := generateX509Certificate(opts)
+	if err != nil {
+		return nil, err
+	}
 	// Self-sign the certificate and return DER bytes
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
 	if err != nil {

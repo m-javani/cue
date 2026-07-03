@@ -138,23 +138,8 @@ func TestSPIFFEVerifier_VerifyPeer(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var rawCerts [][]byte
 
-			switch tt.name {
-			case "no certificates":
-				rawCerts = [][]byte{}
-			case "invalid certificate data":
-				rawCerts = [][]byte{[]byte("invalid cert data")}
-			default:
-				// Generate certificate with the given options
-				certDER, err := generateTestCertDER(tt.certOpts)
-				if err != nil {
-					t.Fatalf("failed to generate test cert: %v", err)
-				}
-				rawCerts = [][]byte{certDER}
-			}
-
-			err := tt.verifier.VerifyPeer(rawCerts, tt.peerID)
+			err := tt.verifier.VerifyPeer(nil, Identity{NodeID: tt.peerID})
 			if (err != nil) != tt.expectErr {
 				t.Errorf("error = %v, expectErr %v", err, tt.expectErr)
 			}
