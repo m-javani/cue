@@ -16,6 +16,7 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"strings"
 	"sync"
@@ -277,6 +278,10 @@ type ToProxyHeartbeat struct {
 	Term       uint64   `msgpack:"term"`
 }
 
+// ========================
+// shared to API
+// ========================
+
 type Members struct {
 	mu       sync.RWMutex
 	Voters   []string
@@ -304,6 +309,39 @@ func (s *Members) Update(voters, learners []string) {
 
 	s.Learners = make([]string, len(learners))
 	copy(s.Learners, learners)
+}
+
+type PeerStore struct {
+	mu    sync.RWMutex
+	Peers map[string]PeerInfo // key: nodeID
+}
+
+// Get returns a copy of the peers map to avoid data races
+func (s *PeerStore) Get() map[string]PeerInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	peers := make(map[string]PeerInfo, len(s.Peers))
+	maps.Copy(peers, s.Peers)
+	return peers
+}
+
+// Lookup returns a peer info for the given nodeID
+// Returns the peer info and a boolean indicating if the peer was found
+func (s *PeerStore) Lookup(nodeID string) (PeerInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	peer, exists := s.Peers[nodeID]
+	return peer, exists
+}
+
+// Set updates the peers map with the given peers
+// If a peer already exists, it will be overwritten
+func (s *PeerStore) Set(peers map[string]PeerInfo) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Peers = peers
 }
 
 // ========================

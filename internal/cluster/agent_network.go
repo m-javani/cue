@@ -24,6 +24,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/m-javani/cue/internal"
 
+	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/utils"
 	"github.com/quic-go/quic-go"
 	"go.uber.org/zap"
@@ -287,6 +288,14 @@ func (a *ClusterAgent) syncConnections() {
 
 			// let nodes that has no connection to this node, update their discovery
 			a.updateOtherNodes()
+
+			// update peerStore
+			peers := a.discovery.ListPeers()
+			peerMap := make(map[string]model.PeerInfo, len(peers))
+			for _, p := range peers {
+				peerMap[p.NodeID] = p
+			}
+			a.peerStore.Set(peerMap)
 
 			// If leader, sync learner nodes via Raft
 			if a.IsLeader() {

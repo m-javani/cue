@@ -82,6 +82,9 @@ func Run(cfg *internal.Config) error {
 		Voters:   []string{},
 		Learners: []string{},
 	}
+	peerStore := model.PeerStore{
+		Peers: make(map[string]model.PeerInfo),
+	}
 
 	leaderID := &atomic.Value{}
 	leaderID.Store("")
@@ -173,6 +176,7 @@ func Run(cfg *internal.Config) error {
 		&status,
 		&currentTerm,
 		&members,
+		&peerStore,
 		leaderID,
 		discovery,
 		logger,
@@ -216,6 +220,7 @@ func Run(cfg *internal.Config) error {
 		cfg.ApiConfig.TokenPath,
 		toClusterCh,
 		&members,
+		&peerStore,
 		leaderID,
 		logger,
 	)

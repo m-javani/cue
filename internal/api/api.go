@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,8 +66,9 @@ type AdminAPI struct {
 	commandCh  chan<- model.Command
 	httpServer *http.Server
 
-	members  *model.Members
-	leaderID *atomic.Value
+	members   *model.Members
+	peerStore *model.PeerStore
+	leaderID  *atomic.Value
 
 	reqIDCounter atomic.Uint64
 
@@ -79,6 +82,7 @@ func NewAdminAPI(
 	AuthFile string,
 	CommandCh chan<- model.Command,
 	members *model.Members,
+	peerStore *model.PeerStore,
 	leaderID *atomic.Value,
 	logger *zap.Logger,
 ) *AdminAPI {
@@ -88,6 +92,7 @@ func NewAdminAPI(
 		authFile:     AuthFile,
 		commandCh:    CommandCh,
 		members:      members,
+		peerStore:    peerStore,
 		leaderID:     leaderID,
 		logger:       logger,
 		reqIDCounter: atomic.Uint64{},
@@ -121,6 +126,10 @@ func (api *AdminAPI) Run(ctx context.Context) error {
 	// Health endpoint (no auth)
 	mux.HandleFunc("/health", api.handleHealth)
 	mux.HandleFunc("/cluster/info", api.handleGetClusterInfo)
+
+	// Discovery endpoints (no auth - accessible by proxies)
+	mux.HandleFunc("/discovery/peers", api.handleGetAllPeers)
+	mux.HandleFunc("/discovery/peers/", api.handleGetPeerByID)
 
 	api.httpServer = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", api.addr, api.port),
@@ -423,4 +432,48 @@ func (api *AdminAPI) handleGetClusterInfo(w http.ResponseWriter, r *http.Request
 			"learners": learners,
 		},
 	})
+}
+
+func (api *AdminAPI) handleGetAllPeers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error": "method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	peers := api.peerStore.Get()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(peers)
+}
+
+func (api *AdminAPI) handleGetPeerByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error": "method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract nodeID from path: /discovery/peers/{nodeID}
+	path := strings.TrimPrefix(r.URL.Path, "/discovery/peers/")
+	if path == "" {
+		http.Error(w, `{"error": "node_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// URL decode the nodeID
+	nodeID, err := url.PathUnescape(path)
+	if err != nil {
+		http.Error(w, `{"error": "invalid node_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	peer, exists := api.peerStore.Lookup(nodeID)
+	if !exists {
+		http.Error(w, fmt.Sprintf(`{"error": "peer with node_id '%s' not found"}`, nodeID), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(peer)
 }

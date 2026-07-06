@@ -332,6 +332,7 @@ func (tc *TestCluster) AddNode(
 		Voters:   []string{},
 		Learners: []string{},
 	}
+	peerStore := &model.PeerStore{Peers: make(map[string]model.PeerInfo)}
 	leaderID := &atomic.Value{}
 	leaderID.Store("")
 
@@ -347,6 +348,7 @@ func (tc *TestCluster) AddNode(
 		&status,
 		&currentTerm,
 		members,
+		peerStore,
 		leaderID,
 		discovery,
 		logger)
@@ -1847,6 +1849,26 @@ func TestSyncPeers(t *testing.T) {
 		require.NoError(t, err)
 		ougoing := n.quicServer.GetActiveOutgoingNodes()
 		require.Equal(t, 2, len(ougoing))
+	}
+
+	// Verify all nodes have the same peer store snapshot
+	var expectedPeers map[string]model.PeerInfo
+	for i, nodeID := range voters {
+		n, err := cl.GetAgent(nodeID)
+		require.NoError(t, err)
+		peerMap := n.peerStore.Get()
+
+		// All nodes should know about all peers
+		for _, p := range cl.peers {
+			_, exists := peerMap[p.NodeID]
+			require.True(t, exists, "node %s missing peer %s", nodeID, p.NodeID)
+		}
+
+		if i == 0 {
+			expectedPeers = peerMap
+		} else {
+			require.Equal(t, expectedPeers, peerMap, "node %s peer store inconsistent", nodeID)
+		}
 	}
 
 }
