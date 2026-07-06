@@ -360,7 +360,48 @@ func TestCommandMarshalUnmarshal_Integration(t *testing.T) {
 				Type:      CmdUpdatePeersList,
 				ProposeID: 100,
 				Peers: &PeersListPayload{
-					Peers: []string{"node-a", "node-b", "node-c", "node-d", "node-e"},
+					Peers: []PeerInfo{
+						{
+							NodeID: "node-a",
+							IP:     "192.168.1.1:8080",
+							Identity: TLSIdentity{
+								Kind:  IdentityDNS,
+								Value: "node-a.example.com",
+							},
+						},
+						{
+							NodeID: "node-b",
+							IP:     "192.168.1.2:8080",
+							Identity: TLSIdentity{
+								Kind:  IdentityDNS,
+								Value: "node-b.example.com",
+							},
+						},
+						{
+							NodeID: "node-c",
+							IP:     "192.168.1.3:8080",
+							Identity: TLSIdentity{
+								Kind:  IdentityDNS,
+								Value: "node-c.example.com",
+							},
+						},
+						{
+							NodeID: "node-d",
+							IP:     "192.168.1.4:8080",
+							Identity: TLSIdentity{
+								Kind:  IdentityDNS,
+								Value: "node-d.example.com",
+							},
+						},
+						{
+							NodeID: "node-e",
+							IP:     "192.168.1.5:8080",
+							Identity: TLSIdentity{
+								Kind:  IdentityDNS,
+								Value: "node-e.example.com",
+							},
+						},
+					},
 				},
 			},
 		},
@@ -685,7 +726,7 @@ func verifyCommand(t *testing.T, expected, actual Command) {
 	case CmdUpdatePeersList:
 		if actual.Peers == nil {
 			t.Error("Peers is nil")
-		} else if !equalSlices(expected.Peers.Peers, actual.Peers.Peers) {
+		} else if !equalPeerInfos(expected.Peers.Peers, actual.Peers.Peers) {
 			t.Errorf("Peers mismatch: got %v, want %v", actual.Peers.Peers, expected.Peers.Peers)
 		}
 
@@ -758,6 +799,28 @@ func verifyCommand(t *testing.T, expected, actual Command) {
 	default:
 		t.Errorf("Unknown command type: %d", expected.Type)
 	}
+}
+
+// Helper function to compare PeerInfo slices
+func equalPeerInfos(a, b []PeerInfo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].NodeID != b[i].NodeID {
+			return false
+		}
+		if a[i].IP != b[i].IP {
+			return false
+		}
+		if a[i].Identity.Kind != b[i].Identity.Kind {
+			return false
+		}
+		if a[i].Identity.Value != b[i].Identity.Value {
+			return false
+		}
+	}
+	return true
 }
 
 // Helper function to compare string slices

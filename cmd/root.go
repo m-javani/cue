@@ -97,10 +97,17 @@ func init() {
 
 	// Cluster discovery (important for multi-node)
 	rootCmd.PersistentFlags().StringSlice("initial-voters", nil, "Initial Raft voters (comma-separated, e.g. node1,node2,node3)")
-	rootCmd.PersistentFlags().StringSlice("peers", nil, "Peer nodes for discovery (comma-separated)")
-
 	_ = viper.BindPFlag("cluster.initial_voters", rootCmd.PersistentFlags().Lookup("initial-voters"))
-	_ = viper.BindPFlag("cluster.peers", rootCmd.PersistentFlags().Lookup("peers"))
+
+	// === Cluster Discovery ===
+	rootCmd.PersistentFlags().String("discovery-kind", "", "Discovery method: static or http")
+	rootCmd.PersistentFlags().String("discovery-yml", "", "Path to discovery.yml (used with static discovery)")
+	rootCmd.PersistentFlags().String("discovery-http-host", "", "HTTP discovery host (used with http discovery)")
+
+	// Bind flags to viper (matching mapstructure keys)
+	_ = viper.BindPFlag("cluster.discovery_kind", rootCmd.PersistentFlags().Lookup("discovery-kind"))
+	_ = viper.BindPFlag("cluster.discovery_yml_path", rootCmd.PersistentFlags().Lookup("discovery-yml"))
+	_ = viper.BindPFlag("cluster.discovery_http_host", rootCmd.PersistentFlags().Lookup("discovery-http-host"))
 
 	// Snapshot & WAL tuning
 	rootCmd.PersistentFlags().Uint64("snapshot-interval", 60, "Snapshot interval in seconds")

@@ -3280,9 +3280,9 @@ func TestHandleCommand_PeersRejected(t *testing.T) {
 
 	respCh := make(chan model.ToProducerResponse, 1)
 	cmd := model.Command{
-		Type: model.CmdUpdatePeersList,
-		Peers: &model.PeersListPayload{
-			Peers: []string{"peer1", "peer2"},
+		Type: model.CmdAddNode,
+		AddNode: &model.AddNodePayload{
+			NodeID: "node1",
 		},
 		RespInfo: &model.RespInfo{
 			RequestID: "req-peers-1",

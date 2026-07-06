@@ -165,7 +165,7 @@ func (a *ClusterAgent) processCommand(cmd model.Command) {
 }
 
 // processUpdatePeersList handles the UpdatePeersList command from gateway or Raft
-func (a *ClusterAgent) processUpdatePeersList(peers []string) error {
+func (a *ClusterAgent) processUpdatePeersList(peers []model.PeerInfo) error {
 	// Update local service discovery
 	a.discovery.UpdatePeers(peers)
 
@@ -179,7 +179,7 @@ func (a *ClusterAgent) processUpdatePeersList(peers []string) error {
 	go a.broadcast(request, 2*time.Second)
 
 	a.logger.Info("updated peers list",
-		zap.Strings("peers", peers),
+		zap.Any("peers", peers),
 		zap.Int("peer_count", len(peers)))
 
 	return nil

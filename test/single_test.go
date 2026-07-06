@@ -33,31 +33,46 @@ func TestProbeCluster(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	// Start cluster
+	// Get integration test directory and prepare certs
 	integrationDir, err := os.Getwd()
-	caCertDir := filepath.Join(integrationDir, "cert")
+	require.NoError(t, err)
 
+	caCertDir := filepath.Join(integrationDir, "cert")
 	_, err = testutils.CreateCA(caCertDir, "ca", 1, "")
 	require.NoError(t, err)
 
-	cluster, err := NewTestCluster(ctx, WithCertsDir(caCertDir))
+	// Start the test cluster
+	cluster, err := NewTestCluster(ctx,
+		WithCertsDir(caCertDir),
+		// We can override discovery if needed:
+		// WithDiscoveryYAML(customDiscoveryData),
+	)
 	require.NoError(t, err)
 	defer cluster.Terminate(ctx)
 
-	time.Sleep(5 * time.Second)
+	// Give the cluster some time to form and elect a leader
+	time.Sleep(8 * time.Second)
 
 	logger, _ := zap.NewDevelopment()
+	sugar := logger.Sugar()
 
-	domain := "localhost"
 	node := cluster.Nodes[0]
-	targetAddr := fmt.Sprintf("%s:%s", domain, node.APIPort)
-	logger.Sugar().Infof("sending prob requests to %s", targetAddr)
+	targetAddr := fmt.Sprintf("%s:%s", node.Hostname, node.APIPort)
+
+	sugar.Infof("Probing node %s at %s", node.Name, targetAddr)
+
 	res, err := ProbeNode(ctx, targetAddr)
 	require.NoError(t, err)
-	require.True(t, res.HealthOK)
-	require.NotEmpty(t, res.Cluster.LeaderID)
-	require.Contains(t, res.Cluster.Members.Voters, node.Name)
+
+	require.True(t, res.HealthOK, "Health check should pass")
+	require.NotEmpty(t, res.Cluster.LeaderID, "Leader should be elected")
+	require.Contains(t, res.Cluster.Members.Voters, node.Name,
+		"Node should be listed as voter")
+
+	// Optional: log cluster state
+	sugar.Infof("Cluster healthy! Leader: %s | Voters: %v",
+		res.Cluster.LeaderID,
+		res.Cluster.Members.Voters)
 
 	logger.Info("PASSED: Cluster is healthy and running.")
-
 }

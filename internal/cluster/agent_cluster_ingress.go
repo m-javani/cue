@@ -15,14 +15,17 @@
 package cluster
 
 import (
+	"time"
+
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
 
 	"github.com/m-javani/cue/internal"
+	"github.com/m-javani/cue/internal/model"
 )
 
 // ProcessRequest handles incoming cluster requests from other nodes via QUIC
-func (a *ClusterAgent) ProcessRequest(request *ClusterRequest) (*ClusterResponse, error) {
+func (a *ClusterAgent) ProcessRequest(request *ClusterRequest, nodeID string) (*ClusterResponse, error) {
 	defer func() {
 		if r := recover(); r != nil {
 			a.logger.Error("commandProcessor panicked",
@@ -52,18 +55,15 @@ func (a *ClusterAgent) ProcessRequest(request *ClusterRequest) (*ClusterResponse
 		}
 		return a.handleUpdatePeersList(request.UpdatePeers.Peers)
 
-	case ReqSharedPeersList:
-		if request.SharedPeers == nil {
-			a.logger.Sugar().Errorf("shared_peers payload missing")
+	case ReqAddMissingPeers:
+		if request.AddMissing == nil {
+			a.logger.Sugar().Errorf("add_missing payload missing")
 			return &ClusterResponse{Type: ResNegative, Negative: &NegativePayload{}}, nil
 		}
-		return a.handleSharedPeersList(request.SharedPeers.Peers)
+		return a.handleAddMissingPeers(request.AddMissing.Peers)
 
 	case ReqPeersListQuery:
-		return &ClusterResponse{
-			Type:      ResPeersList,
-			PeersList: &PeersListRespPayload{Peers: a.discovery.ListPeers()},
-		}, nil
+		return a.handlePeersListQuery(nodeID)
 
 	case ReqRaftMessage:
 		if request.RaftMessage == nil {
@@ -88,24 +88,34 @@ func (a *ClusterAgent) ProcessRequest(request *ClusterRequest) (*ClusterResponse
 	}
 }
 
-func (a *ClusterAgent) handleUpdatePeersList(peers []string) (*ClusterResponse, error) {
+func (a *ClusterAgent) handleUpdatePeersList(peers []model.PeerInfo) (*ClusterResponse, error) {
 	// Update service discovery
 	a.discovery.UpdatePeers(peers)
-
-	// Sync connections asynchronously
-	go func() {
-		peerAddrs := a.discovery.ListPeersAddrServerName()
-		if err := a.quicServer.SyncConnections(peerAddrs); err != nil {
-			a.logger.Warn("failed to sync connections after peer list update",
-				zap.Error(err))
-		}
-	}()
 
 	return &ClusterResponse{Type: ResAck, Ack: &AckPayload{}}, nil
 }
 
-func (a *ClusterAgent) handleSharedPeersList(peers []string) (*ClusterResponse, error) {
+func (a *ClusterAgent) handleAddMissingPeers(peers []model.PeerInfo) (*ClusterResponse, error) {
 	a.discovery.MergePeers(peers)
+	a.peerSyncOutgoingCoolDown.Store(time.Now().Local().UnixMilli())
+	return &ClusterResponse{Type: ResAck, Ack: &AckPayload{}}, nil
+}
+
+func (a *ClusterAgent) handlePeersListQuery(nodeID string) (*ClusterResponse, error) {
+	peers := a.discovery.ListPeers()
+
+	go func(tid string) {
+		request := &ClusterRequest{
+			Type:       ReqAddMissingPeers,
+			AddMissing: &AddMissingPayload{Peers: peers},
+		}
+		_, err := a.sendRequest(nodeID, request)
+		if err != nil {
+			a.logger.Debug("failed to share peers with node",
+				zap.String("target", nodeID),
+				zap.Error(err))
+		}
+	}(nodeID)
 
 	return &ClusterResponse{Type: ResAck, Ack: &AckPayload{}}, nil
 }

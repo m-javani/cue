@@ -16,6 +16,7 @@ package model
 
 import (
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -794,34 +795,554 @@ func TestToGatewayMessage(t *testing.T) {
 	}
 }
 
-// Benchmark tests
-func BenchmarkProxyRequestType_String(b *testing.B) {
-	t := ReqAddTopic
-	for i := 0; i < b.N; i++ {
-		_ = t.String()
+func TestIdentityKindConstants(t *testing.T) {
+	if IdentityDNS != 0 {
+		t.Errorf("IdentityDNS = %v, want 0", IdentityDNS)
+	}
+	if IdentityIP != 1 {
+		t.Errorf("IdentityIP = %v, want 1", IdentityIP)
+	}
+	if IdentitySPIFFE != 2 {
+		t.Errorf("IdentitySPIFFE = %v, want 2", IdentitySPIFFE)
 	}
 }
 
-func BenchmarkMembers_Get(b *testing.B) {
-	s := &Members{
-		Voters:   []string{"node1", "node2", "node3"},
-		Learners: []string{"node4", "node5"},
+func TestTLSIdentity_String(t *testing.T) {
+	tests := []struct {
+		name     string
+		identity TLSIdentity
+		want     string
+	}{
+		{
+			name: "DNS identity",
+			identity: TLSIdentity{
+				Kind:  IdentityDNS,
+				Value: "example.com",
+			},
+			want: "DNS:example.com",
+		},
+		{
+			name: "IP identity",
+			identity: TLSIdentity{
+				Kind:  IdentityIP,
+				Value: "192.168.1.1",
+			},
+			want: "IP:192.168.1.1",
+		},
+		{
+			name: "SPIFFE identity",
+			identity: TLSIdentity{
+				Kind:  IdentitySPIFFE,
+				Value: "spiffe://example.org/service",
+			},
+			want: "SPIFFE:spiffe://example.org/service",
+		},
+		{
+			name: "Unknown identity",
+			identity: TLSIdentity{
+				Kind:  IdentityKind(99),
+				Value: "unknown-value",
+			},
+			want: "Unknown:unknown-value",
+		},
+		{
+			name: "Empty value with DNS kind",
+			identity: TLSIdentity{
+				Kind:  IdentityDNS,
+				Value: "",
+			},
+			want: "DNS:",
+		},
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, _ = s.Get()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.identity.String(); got != tt.want {
+				t.Errorf("TLSIdentity.String() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
-func BenchmarkMembers_Update(b *testing.B) {
-	s := &Members{
-		Voters:   []string{"node1", "node2"},
-		Learners: []string{"node3"},
+func TestPeerInfo_String(t *testing.T) {
+	tests := []struct {
+		name string
+		peer PeerInfo
+		want string
+	}{
+		{
+			name: "Peer with DNS identity",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "192.168.1.1:8080",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "node1.example.com",
+				},
+				Port: 0,
+			},
+			want: "NodeID:node-1, IP:192.168.1.1:8080, Port:0, Identity:DNS:node1.example.com",
+		},
+		{
+			name: "Peer with IP identity",
+			peer: PeerInfo{
+				NodeID: "node-2",
+				IP:     "10.0.0.1:9090",
+				Identity: TLSIdentity{
+					Kind:  IdentityIP,
+					Value: "10.0.0.1",
+				},
+				Port: 0,
+			},
+			want: "NodeID:node-2, IP:10.0.0.1:9090, Port:0, Identity:IP:10.0.0.1",
+		},
+		{
+			name: "Peer with SPIFFE identity",
+			peer: PeerInfo{
+				NodeID: "node-3",
+				IP:     "172.16.0.1:8080",
+				Identity: TLSIdentity{
+					Kind:  IdentitySPIFFE,
+					Value: "spiffe://cluster/node-3",
+				},
+				Port: 0,
+			},
+			want: "NodeID:node-3, IP:172.16.0.1:8080, Port:0, Identity:SPIFFE:spiffe://cluster/node-3",
+		},
+		{
+			name: "Peer with empty fields",
+			peer: PeerInfo{
+				NodeID:   "",
+				IP:       "",
+				Identity: TLSIdentity{},
+				Port:     0,
+			},
+			want: "NodeID:, IP:, Port:0, Identity:DNS:",
+		},
+		{
+			name: "Peer with unknown identity kind",
+			peer: PeerInfo{
+				NodeID: "node-4",
+				IP:     "192.168.1.4:8080",
+				Identity: TLSIdentity{
+					Kind:  IdentityKind(99),
+					Value: "unknown",
+				},
+				Port: 0,
+			},
+			want: "NodeID:node-4, IP:192.168.1.4:8080, Port:0, Identity:Unknown:unknown",
+		},
 	}
-	voters := []string{"node4", "node5"}
-	learners := []string{"node6"}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		s.Update(voters, learners)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.peer.String(); got != tt.want {
+				t.Errorf("PeerInfo.String() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPeerInfo_Fields(t *testing.T) {
+	peer := PeerInfo{
+		NodeID: "test-node",
+		IP:     "192.168.1.100:8080",
+		Identity: TLSIdentity{
+			Kind:  IdentityDNS,
+			Value: "test.example.com",
+		},
+	}
+
+	if peer.NodeID != "test-node" {
+		t.Errorf("PeerInfo.NodeID = %v, want test-node", peer.NodeID)
+	}
+	if peer.IP != "192.168.1.100:8080" {
+		t.Errorf("PeerInfo.IP = %v, want 192.168.1.100:8080", peer.IP)
+	}
+	if peer.Identity.Kind != IdentityDNS {
+		t.Errorf("PeerInfo.Identity.Kind = %v, want IdentityDNS", peer.Identity.Kind)
+	}
+	if peer.Identity.Value != "test.example.com" {
+		t.Errorf("PeerInfo.Identity.Value = %v, want test.example.com", peer.Identity.Value)
+	}
+}
+
+func TestTLSIdentity_Validate(t *testing.T) {
+	tests := []struct {
+		name     string
+		identity TLSIdentity
+		wantErr  bool
+		errMsg   string
+	}{
+		{
+			name: "Valid DNS identity",
+			identity: TLSIdentity{
+				Kind:  IdentityDNS,
+				Value: "example.com",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid DNS with subdomain",
+			identity: TLSIdentity{
+				Kind:  IdentityDNS,
+				Value: "sub.example.com",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid DNS with hyphen",
+			identity: TLSIdentity{
+				Kind:  IdentityDNS,
+				Value: "my-service.example.com",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid IP address (IPv4)",
+			identity: TLSIdentity{
+				Kind:  IdentityIP,
+				Value: "192.168.1.1",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid IP address (IPv6)",
+			identity: TLSIdentity{
+				Kind:  IdentityIP,
+				Value: "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid SPIFFE identity",
+			identity: TLSIdentity{
+				Kind:  IdentitySPIFFE,
+				Value: "spiffe://example.org/service",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid SPIFFE with path",
+			identity: TLSIdentity{
+				Kind:  IdentitySPIFFE,
+				Value: "spiffe://cluster.local/ns/default/sa/my-service",
+			},
+			wantErr: false,
+		},
+		{
+			name: "Empty value",
+			identity: TLSIdentity{
+				Kind:  IdentityDNS,
+				Value: "",
+			},
+			wantErr: true,
+			errMsg:  "identity value is required",
+		},
+		{
+			name: "Whitespace only value",
+			identity: TLSIdentity{
+				Kind:  IdentityDNS,
+				Value: "   ",
+			},
+			wantErr: true,
+			errMsg:  "identity value is required",
+		},
+		{
+			name: "Unknown identity kind",
+			identity: TLSIdentity{
+				Kind:  IdentityKind(99),
+				Value: "some-value",
+			},
+			wantErr: true,
+			errMsg:  "unknown identity kind",
+		},
+		{
+			name: "DNS name too long",
+			identity: TLSIdentity{
+				Kind:  IdentityDNS,
+				Value: string(make([]byte, 254)), // 254 characters
+			},
+			wantErr: true,
+			errMsg:  "DNS name too long",
+		},
+		{
+			name: "Invalid IP address",
+			identity: TLSIdentity{
+				Kind:  IdentityIP,
+				Value: "256.256.256.256",
+			},
+			wantErr: true,
+			errMsg:  "invalid IP address",
+		},
+		{
+			name: "Invalid IP address format",
+			identity: TLSIdentity{
+				Kind:  IdentityIP,
+				Value: "not-an-ip",
+			},
+			wantErr: true,
+			errMsg:  "invalid IP address",
+		},
+		{
+			name: "SPIFFE without prefix",
+			identity: TLSIdentity{
+				Kind:  IdentitySPIFFE,
+				Value: "example.org/service",
+			},
+			wantErr: true,
+			errMsg:  "SPIFFE identity must start with spiffe://",
+		},
+		{
+			name: "SPIFFE with wrong case prefix",
+			identity: TLSIdentity{
+				Kind:  IdentitySPIFFE,
+				Value: "SPIFFE://example.org/service",
+			},
+			wantErr: false, // Should be case-insensitive
+		},
+		{
+			name: "SPIFFE with just prefix",
+			identity: TLSIdentity{
+				Kind:  IdentitySPIFFE,
+				Value: "spiffe://",
+			},
+			wantErr: false, // Valid SPIFFE identity can be just the prefix
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.identity.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("TLSIdentity.Validate() expected error, got nil")
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("TLSIdentity.Validate() error = %v, want error containing %v", err, tt.errMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("TLSIdentity.Validate() unexpected error = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestPeerInfo_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		peer    PeerInfo
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "Valid peer with DNS identity",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "192.168.1.1",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "node1.example.com",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid peer with IP identity",
+			peer: PeerInfo{
+				NodeID: "node-2",
+				IP:     "10.0.0.1",
+				Identity: TLSIdentity{
+					Kind:  IdentityIP,
+					Value: "10.0.0.1",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid peer with SPIFFE identity",
+			peer: PeerInfo{
+				NodeID: "node-3",
+				IP:     "172.16.0.1",
+				Identity: TLSIdentity{
+					Kind:  IdentitySPIFFE,
+					Value: "spiffe://cluster/node-3",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Valid peer with IPv6 address",
+			peer: PeerInfo{
+				NodeID: "node-4",
+				IP:     "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "node4.example.com",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "Empty NodeID",
+			peer: PeerInfo{
+				NodeID: "",
+				IP:     "192.168.1.1",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "node_id is required",
+		},
+		{
+			name: "Whitespace NodeID",
+			peer: PeerInfo{
+				NodeID: "   ",
+				IP:     "192.168.1.1",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "node_id is required",
+		},
+		{
+			name: "NodeID too long",
+			peer: PeerInfo{
+				NodeID: string(make([]byte, 65)), // 65 characters
+				IP:     "192.168.1.1",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "node_id too long",
+		},
+		{
+			name: "Empty IP",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "ip is required",
+		},
+		{
+			name: "Whitespace IP",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "   ",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "ip is required",
+		},
+		{
+			name: "Invalid IP address",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "256.256.256.256",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid IP address",
+		},
+		{
+			name: "Invalid IP format",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "not-an-ip",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid IP address",
+		},
+		{
+			name: "Invalid identity",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "192.168.1.1",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "", // Empty value
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid identity",
+		},
+		{
+			name: "Unknown identity kind",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "192.168.1.1",
+				Identity: TLSIdentity{
+					Kind:  IdentityKind(99),
+					Value: "some-value",
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid identity",
+		},
+		{
+			name: "Peer with port in IP (should be invalid)",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "192.168.1.1:8080",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid IP address",
+		},
+		{
+			name: "Peer with DNS name in IP field (should be invalid)",
+			peer: PeerInfo{
+				NodeID: "node-1",
+				IP:     "example.com",
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			},
+			wantErr: true,
+			errMsg:  "invalid IP address",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.peer.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("PeerInfo.Validate() expected error, got nil")
+				} else if tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("PeerInfo.Validate() error = %v, want error containing %v", err, tt.errMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("PeerInfo.Validate() unexpected error = %v", err)
+				}
+			}
+		})
 	}
 }

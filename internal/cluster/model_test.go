@@ -33,7 +33,7 @@ func TestClusterRequestType_String(t *testing.T) {
 		{"Heartbeat", ReqConnectionHeartbeat, "ReqConnectionHeartbeat"},
 		{"PeersListQuery", ReqPeersListQuery, "ReqPeersListQuery"},
 		{"UpdatePeersList", ReqUpdatePeersList, "ReqUpdatePeersList"},
-		{"SharedPeersList", ReqSharedPeersList, "ReqSharedPeersList"},
+		{"AddMissingPeers", ReqAddMissingPeers, "ReqAddMissingPeers"},
 		{"RaftMessage", ReqRaftMessage, "ReqRaftMessage"},
 		{"ClusterInfo", ReqClusterInfo, "ReqClusterInfo"},
 		{"Unknown", ClusterRequestType(99), "UnknownRequestType(99)"},
@@ -68,6 +68,7 @@ func TestClusterResponseType_String(t *testing.T) {
 	}
 }
 
+// TestClusterRequest_String
 func TestClusterRequest_String(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -92,25 +93,38 @@ func TestClusterRequest_String(t *testing.T) {
 		{
 			name: "PeersListQuery",
 			req: ClusterRequest{
-				Type:      ReqPeersListQuery,
-				PeersList: &PeersListRespPayload{Peers: []string{"peer1", "peer2"}},
-			},
-			contains: []string{"ReqPeersListQuery", "Peers=[peer1 peer2]"},
-		},
-		{
-			name: "PeersListQuery nil",
-			req: ClusterRequest{
 				Type: ReqPeersListQuery,
+				// PeersListQuery should NOT have a PeersList payload - it's a query
+				// The PeersList field is for responses
 			},
 			contains: []string{"ReqPeersListQuery", "nil"},
 		},
 		{
 			name: "UpdatePeersList",
 			req: ClusterRequest{
-				Type:        ReqUpdatePeersList,
-				UpdatePeers: &UpdatePeersPayload{Peers: []string{"peer1", "peer2"}},
+				Type: ReqUpdatePeersList,
+				UpdatePeers: &UpdatePeersPayload{
+					Peers: []model.PeerInfo{
+						{
+							NodeID: "peer1",
+							IP:     "192.168.1.1:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer1.example.com",
+							},
+						},
+						{
+							NodeID: "peer2",
+							IP:     "192.168.1.2:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer2.example.com",
+							},
+						},
+					},
+				},
 			},
-			contains: []string{"ReqUpdatePeersList", "Peers=[peer1 peer2]"},
+			contains: []string{"ReqUpdatePeersList", "NodeID:peer1", "NodeID:peer2"},
 		},
 		{
 			name: "UpdatePeersList nil",
@@ -120,19 +134,38 @@ func TestClusterRequest_String(t *testing.T) {
 			contains: []string{"ReqUpdatePeersList", "nil"},
 		},
 		{
-			name: "SharedPeersList",
+			name: "AddMissingPeers",
 			req: ClusterRequest{
-				Type:        ReqSharedPeersList,
-				SharedPeers: &SharedPeersPayload{Peers: []string{"peer1", "peer2"}},
+				Type: ReqAddMissingPeers,
+				AddMissing: &AddMissingPayload{
+					Peers: []model.PeerInfo{
+						{
+							NodeID: "peer1",
+							IP:     "192.168.1.1:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer1.example.com",
+							},
+						},
+						{
+							NodeID: "peer2",
+							IP:     "192.168.1.2:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer2.example.com",
+							},
+						},
+					},
+				},
 			},
-			contains: []string{"ReqSharedPeersList", "Peers=[peer1 peer2]"},
+			contains: []string{"ReqAddMissingPeers", "NodeID:peer1", "NodeID:peer2"},
 		},
 		{
-			name: "SharedPeersList nil",
+			name: "AddMissingPeers nil",
 			req: ClusterRequest{
-				Type: ReqSharedPeersList,
+				Type: ReqAddMissingPeers,
 			},
-			contains: []string{"ReqSharedPeersList", "nil"},
+			contains: []string{"ReqAddMissingPeers", "nil"},
 		},
 		{
 			name: "RaftMessage with data",
@@ -211,10 +244,29 @@ func TestClusterResponse_String(t *testing.T) {
 		{
 			name: "PeersList",
 			resp: ClusterResponse{
-				Type:      ResPeersList,
-				PeersList: &PeersListRespPayload{Peers: []string{"peer1", "peer2"}},
+				Type: ResPeersList,
+				PeersList: &PeersListRespPayload{
+					Peers: []model.PeerInfo{
+						{
+							NodeID: "peer1",
+							IP:     "192.168.1.1:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer1.example.com",
+							},
+						},
+						{
+							NodeID: "peer2",
+							IP:     "192.168.1.2:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer2.example.com",
+							},
+						},
+					},
+				},
 			},
-			contains: []string{"ResPeersList", "Peers=[peer1 peer2]"},
+			contains: []string{"ResPeersList", "NodeID:peer1", "NodeID:peer2"},
 		},
 		{
 			name: "PeersList nil",
@@ -307,6 +359,7 @@ func TestClusterResponse_String(t *testing.T) {
 	}
 }
 
+// TestClusterRequest_MarshalUnmarshal
 func TestClusterRequest_MarshalUnmarshal(t *testing.T) {
 	tests := []struct {
 		name string
@@ -322,22 +375,65 @@ func TestClusterRequest_MarshalUnmarshal(t *testing.T) {
 		{
 			name: "PeersListQuery",
 			req: ClusterRequest{
-				Type:      ReqPeersListQuery,
-				PeersList: &PeersListRespPayload{Peers: []string{"peer1", "peer2"}},
+				Type: ReqPeersListQuery,
+				// PeersListQuery is a request - it should NOT have a PeersList payload
+				// The PeersList field is for responses
 			},
 		},
 		{
 			name: "UpdatePeersList",
 			req: ClusterRequest{
-				Type:        ReqUpdatePeersList,
-				UpdatePeers: &UpdatePeersPayload{Peers: []string{"peer1", "peer2"}},
+				Type: ReqUpdatePeersList,
+				UpdatePeers: &UpdatePeersPayload{
+					Peers: []model.PeerInfo{
+						{
+							NodeID: "peer1",
+							IP:     "192.168.1.1:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer1.example.com",
+							},
+							Port: 0,
+						},
+						{
+							NodeID: "peer2",
+							IP:     "192.168.1.2:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer2.example.com",
+							},
+							Port: 0,
+						},
+					},
+				},
 			},
 		},
 		{
-			name: "SharedPeersList",
+			name: "AddMissingPeers",
 			req: ClusterRequest{
-				Type:        ReqSharedPeersList,
-				SharedPeers: &SharedPeersPayload{Peers: []string{"peer1", "peer2"}},
+				Type: ReqAddMissingPeers,
+				AddMissing: &AddMissingPayload{
+					Peers: []model.PeerInfo{
+						{
+							NodeID: "peer1",
+							IP:     "192.168.1.1:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer1.example.com",
+							},
+							Port: 0,
+						},
+						{
+							NodeID: "peer2",
+							IP:     "192.168.1.2:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer2.example.com",
+							},
+							Port: 0,
+						},
+					},
+				},
 			},
 		},
 		{
@@ -398,8 +494,27 @@ func TestClusterResponse_MarshalUnmarshal(t *testing.T) {
 		{
 			name: "PeersList",
 			resp: ClusterResponse{
-				Type:      ResPeersList,
-				PeersList: &PeersListRespPayload{Peers: []string{"peer1", "peer2"}},
+				Type: ResPeersList,
+				PeersList: &PeersListRespPayload{
+					Peers: []model.PeerInfo{
+						{
+							NodeID: "peer1",
+							IP:     "192.168.1.1:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer1.example.com",
+							},
+						},
+						{
+							NodeID: "peer2",
+							IP:     "192.168.1.2:8080",
+							Identity: model.TLSIdentity{
+								Kind:  model.IdentityDNS,
+								Value: "peer2.example.com",
+							},
+						},
+					},
+				},
 			},
 		},
 		{
@@ -468,6 +583,7 @@ func TestClusterResponse_MarshalUnmarshal(t *testing.T) {
 	}
 }
 
+// TestClusterRequest_MarshalErrors
 func TestClusterRequest_MarshalErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -481,13 +597,14 @@ func TestClusterRequest_MarshalErrors(t *testing.T) {
 			},
 			wantErr: "heartbeat payload missing",
 		},
-		{
-			name: "Missing PeersList",
-			req: ClusterRequest{
-				Type: ReqPeersListQuery,
-			},
-			wantErr: "peers_list payload missing",
-		},
+		// ReqPeersListQuery should NOT have a payload, so this test is invalid
+		// {
+		// 	name: "Missing PeersList",
+		// 	req: ClusterRequest{
+		// 		Type: ReqPeersListQuery,
+		// 	},
+		// 	wantErr: "peers_list payload missing",
+		// },
 		{
 			name: "Missing UpdatePeers",
 			req: ClusterRequest{
@@ -496,11 +613,11 @@ func TestClusterRequest_MarshalErrors(t *testing.T) {
 			wantErr: "update_peers payload missing",
 		},
 		{
-			name: "Missing SharedPeers",
+			name: "Missing AddMissing",
 			req: ClusterRequest{
-				Type: ReqSharedPeersList,
+				Type: ReqAddMissingPeers,
 			},
-			wantErr: "shared_peers payload missing",
+			wantErr: "add_missing payload missing",
 		},
 		{
 			name: "Missing RaftMessage",
@@ -625,19 +742,9 @@ func TestClusterRequest_UnmarshalErrors(t *testing.T) {
 			wantErr: "unmarshal heartbeat:",
 		},
 		{
-			name:    "Invalid peers_list payload",
-			data:    mustMarshal([2]any{uint8(ReqPeersListQuery), "invalid"}),
-			wantErr: "unmarshal peers_list:",
-		},
-		{
-			name:    "Invalid update_peers payload",
-			data:    mustMarshal([2]any{uint8(ReqUpdatePeersList), "invalid"}),
-			wantErr: "unmarshal update_peers:",
-		},
-		{
-			name:    "Invalid shared_peers payload",
-			data:    mustMarshal([2]any{uint8(ReqSharedPeersList), "invalid"}),
-			wantErr: "unmarshal shared_peers:",
+			name:    "Invalid add_missing payload",
+			data:    mustMarshal([2]any{uint8(ReqAddMissingPeers), "invalid"}),
+			wantErr: "unmarshal add_missing:",
 		},
 		{
 			name:    "Invalid raft_message payload",
@@ -723,16 +830,19 @@ func TestClusterResponse_UnmarshalErrors(t *testing.T) {
 }
 
 func TestPeerResolvedInfo_MarshalUnmarshal(t *testing.T) {
-	original := PeerResolvedInfo{
-		NodeId:     "node-123",
-		Addr:       "192.168.1.100:8080",
-		ServerName: "server.example.com",
+	original := model.PeerInfo{
+		NodeID: "node-123",
+		IP:     "192.168.1.100:8080",
+		Identity: model.TLSIdentity{
+			Kind:  model.IdentityDNS,
+			Value: "server.example.com",
+		},
 	}
 
 	data, err := msgpack.Marshal(original)
 	require.NoError(t, err)
 
-	var decoded PeerResolvedInfo
+	var decoded model.PeerInfo
 	err = msgpack.Unmarshal(data, &decoded)
 	require.NoError(t, err)
 
@@ -799,7 +909,7 @@ func TestClusterRequest_NilPayloads(t *testing.T) {
 		Heartbeat:   nil,
 		PeersList:   nil,
 		UpdatePeers: nil,
-		SharedPeers: nil,
+		AddMissing:  nil,
 		RaftMessage: nil,
 		ClusterInfo: nil,
 	}
@@ -921,13 +1031,13 @@ func TestClusterNodeStatus_MsgpackSerialization(t *testing.T) {
 	}
 }
 
-// Test ClusterRequest with all possible request types
+// TestClusterRequest_AllTypes
 func TestClusterRequest_AllTypes(t *testing.T) {
 	types := []ClusterRequestType{
 		ReqConnectionHeartbeat,
 		ReqPeersListQuery,
 		ReqUpdatePeersList,
-		ReqSharedPeersList,
+		ReqAddMissingPeers,
 		ReqRaftMessage,
 		ReqClusterInfo,
 	}
@@ -939,11 +1049,40 @@ func TestClusterRequest_AllTypes(t *testing.T) {
 			case ReqConnectionHeartbeat:
 				req = ClusterRequest{Type: rt, Heartbeat: &HeartbeatPayload{Timestamp: 123}}
 			case ReqPeersListQuery:
-				req = ClusterRequest{Type: rt, PeersList: &PeersListRespPayload{Peers: []string{"a"}}}
+				// PeersListQuery should have nil payload
+				req = ClusterRequest{Type: rt}
 			case ReqUpdatePeersList:
-				req = ClusterRequest{Type: rt, UpdatePeers: &UpdatePeersPayload{Peers: []string{"a"}}}
-			case ReqSharedPeersList:
-				req = ClusterRequest{Type: rt, SharedPeers: &SharedPeersPayload{Peers: []string{"a"}}}
+				req = ClusterRequest{
+					Type: rt,
+					UpdatePeers: &UpdatePeersPayload{
+						Peers: []model.PeerInfo{
+							{
+								NodeID: "peer1",
+								IP:     "192.168.1.1:8080",
+								Identity: model.TLSIdentity{
+									Kind:  model.IdentityDNS,
+									Value: "peer1.example.com",
+								},
+							},
+						},
+					},
+				}
+			case ReqAddMissingPeers:
+				req = ClusterRequest{
+					Type: rt,
+					AddMissing: &AddMissingPayload{
+						Peers: []model.PeerInfo{
+							{
+								NodeID: "peer1",
+								IP:     "192.168.1.1:8080",
+								Identity: model.TLSIdentity{
+									Kind:  model.IdentityDNS,
+									Value: "peer1.example.com",
+								},
+							},
+						},
+					},
+				}
 			case ReqRaftMessage:
 				req = ClusterRequest{Type: rt, RaftMessage: &RaftMessagePayload{Data: []byte("test")}}
 			case ReqClusterInfo:

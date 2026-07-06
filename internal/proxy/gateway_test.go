@@ -32,7 +32,6 @@ import (
 	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/state"
 	"github.com/m-javani/cue/internal/testutils"
-	"github.com/m-javani/cue/pkg/verifier"
 	"github.com/quic-go/quic-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -115,7 +114,6 @@ func NewGatewayTester(t *testing.T) *GatewayTester {
 		&currentTerm,
 		members,
 		leaderID,
-		verifier.CNVerifier{},
 	)
 	require.NoError(t, err)
 

@@ -23,6 +23,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,7 +33,6 @@ import (
 	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/state"
 	"github.com/m-javani/cue/internal/testutils"
-	"github.com/m-javani/cue/pkg/verifier"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -71,26 +71,28 @@ func (h *FakeHandler) ProcessCommand(ctx context.Context, topic string, cmd *mod
 // === NEW: Node name mapping helpers ===
 
 type nodeMapping struct {
-	userID     string
+	nodeID     string
 	internalID string
 	quicPort   uint16
+	peerInfo   model.PeerInfo
 }
 
 // TestCluster manages test nodes for integration tests
 type TestCluster struct {
-	nodes        map[string]*testNode    // key = userNodeID
-	nodeMapping  map[string]*nodeMapping // userNodeID -> mapping
-	testDirs     map[string]string       // userNodeID -> data directory path
-	baseDir      string
-	testBaseDir  string
-	t            testing.TB
-	mu           sync.RWMutex
-	logger       *zap.Logger
-	cleanedUp    bool
-	ca           *testutils.CAInfo
-	peers        []string // user node IDs
-	randSrc      *rand.Rand
-	certBasePath string
+	nodes         map[string]*testNode    // key = userNodeID
+	nodeMapping   map[string]*nodeMapping // userNodeID -> mapping
+	testDirs      map[string]string       // userNodeID -> data directory path
+	baseDir       string
+	testBaseDir   string
+	t             testing.TB
+	mu            sync.RWMutex
+	logger        *zap.Logger
+	cleanedUp     bool
+	ca            *testutils.CAInfo
+	peers         []model.PeerInfo // user node IDs
+	randSrc       *rand.Rand
+	certBasePath  string
+	initialVoters []string
 }
 
 // testNode holds everything needed for one node (internalID is used for transport)
@@ -158,19 +160,18 @@ func NewTestCluster(t testing.TB) (*TestCluster, error) {
 	return tc, nil
 }
 
-func (tc *TestCluster) SetInitialVoters(peers []string) {
+func (tc *TestCluster) UpsertTestClusterPeers(peers []string) {
 	// Build peers list with internal IDs
-	internalPeers := make([]string, len(tc.peers))
-	for i, p := range peers {
+	internalPeers := make([]model.PeerInfo, len(tc.peers))
+	for _, p := range peers {
 		if pm, ok := tc.nodeMapping[p]; ok {
-			internalPeers[i] = pm.internalID
+			internalPeers = append(internalPeers, pm.peerInfo)
 		} else {
 			mapping := tc.getOrCreateMapping(p)
-			internalPeers = append(internalPeers, mapping.internalID)
+			internalPeers = append(internalPeers, mapping.peerInfo)
 		}
 	}
 	tc.peers = internalPeers // user node IDs
-
 }
 
 // generateRandomPort returns a random port in 30000-60000 range (no availability check)
@@ -188,9 +189,18 @@ func (tc *TestCluster) getOrCreateMapping(nodeID string) *nodeMapping {
 	internalID := fmt.Sprintf("%s-%d", nodeID, port)
 
 	m := &nodeMapping{
-		userID:     nodeID,
+		nodeID:     nodeID,
 		internalID: internalID,
 		quicPort:   port,
+		peerInfo: model.PeerInfo{
+			NodeID: internalID,
+			IP:     "127.0.0.1",
+			Identity: model.TLSIdentity{
+				Kind:  model.IdentityDNS,
+				Value: internalID + ".localhost",
+			},
+			Port: port,
+		},
 	}
 	tc.nodeMapping[nodeID] = m
 	return m
@@ -225,17 +235,15 @@ func (tc *TestCluster) AddNode(
 	}
 
 	mapping := tc.getOrCreateMapping(nodeID)
-
 	// Determine peers: use custom if provided, otherwise use tc.peers
-	var peers []string
+	var peers []model.PeerInfo
 	if len(customPeers) > 0 && customPeers[0] != nil {
 		// Convert user IDs to internal IDs
 		for _, userID := range customPeers[0] {
 			if pm, exists := tc.nodeMapping[userID]; exists {
-				peers = append(peers, pm.internalID)
+				peers = append(peers, pm.peerInfo)
 			} else {
-				pm := tc.getOrCreateMapping(userID)
-				peers = append(peers, pm.internalID)
+				peers = append(peers, mapping.peerInfo)
 			}
 		}
 	} else {
@@ -282,22 +290,26 @@ func (tc *TestCluster) AddNode(
 	// Use internalID + port for QUIC
 	listenAddr := fmt.Sprintf("127.0.0.1:%d", mapping.quicPort)
 
+	discovery, err := NewServiceDiscovery(logger, peers, mapping.internalID, internal.DiscoveryKindStatic, "", time.Duration(1*time.Second))
+	if err != nil {
+		return err
+	}
 	quicServer, err := NewClusterQUIC(
 		mapping.internalID, // internal name for transport layer
+		int(mapping.quicPort),
 		certPath, keyPath, caPath,
 		listenAddr,
 		logger,
-		verifier.CNVerifier{},
+		discovery,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create QUIC server for %s: %w", nodeID, err)
 	}
 
 	cfg := internal.ClusterConfig{
-		InitialVoters:        peers, // Use custom peers or default
+		InitialVoters:        tc.initialVoters, // Use custom peers or default
 		ListenAddr:           listenAddr,
 		QUICPort:             mapping.quicPort,
-		Peers:                peers, // Use custom peers or default
 		SnapshotIntervalSec:  snapshotIntervalSec,
 		SnapshotTriggerCount: snapshotTriggerCount,
 		WALFlushThreshold:    walFlushThreshold,
@@ -307,6 +319,7 @@ func (tc *TestCluster) AddNode(
 		RaftTickMs:           100,
 		RaftHeartbeatTick:    2,
 		RaftElectionTick:     10,
+		DLQMaxSizeBytes:      1024,
 	}
 
 	handler := NewFakeHandler(logger, nil)
@@ -322,9 +335,21 @@ func (tc *TestCluster) AddNode(
 	leaderID := &atomic.Value{}
 	leaderID.Store("")
 
-	addrResolver := testutils.TestAddressResolver{}
-
-	agent, err := NewClusterAgent(ctx, cancel, mapping.internalID, cfg, dataDir, commandCh, handler, quicServer, &status, &currentTerm, members, leaderID, addrResolver, logger)
+	agent, err := NewClusterAgent(
+		ctx,
+		cancel,
+		mapping.internalID,
+		cfg,
+		dataDir,
+		commandCh,
+		handler,
+		quicServer,
+		&status,
+		&currentTerm,
+		members,
+		leaderID,
+		discovery,
+		logger)
 	if err != nil {
 		return fmt.Errorf("failed to create ClusterAgent for %s: %w", nodeID, err)
 	}
@@ -342,6 +367,58 @@ func (tc *TestCluster) AddNode(
 	}
 
 	tc.nodes[nodeID] = node
+
+	return nil
+}
+
+func (tc *TestCluster) SetInitialVoters(initial []string) {
+	var initialVoters []string
+	for _, v := range initial {
+		mapping := tc.getOrCreateMapping(v)
+		initialVoters = append(initialVoters, mapping.internalID)
+
+	}
+	tc.initialVoters = initialVoters
+}
+
+// In TestCluster, add a method:
+func (tc *TestCluster) UpdateAllNodesDiscoveries() {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	// Build full peer list from all mappings
+	allPeers := make([]model.PeerInfo, 0, len(tc.nodeMapping))
+	for _, m := range tc.nodeMapping {
+		allPeers = append(allPeers, m.peerInfo)
+	}
+
+	// Update all nodes' discoveries
+	for _, node := range tc.nodes {
+		if node.agent != nil && node.agent.discovery != nil {
+			node.agent.discovery.UpdatePeers(allPeers)
+		}
+	}
+}
+
+func (tc *TestCluster) UpdatePeerDiscoveryByNodeID(nodeID string) error {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+
+	// Build full peer list from all mappings
+	allPeers := make([]model.PeerInfo, 0, len(tc.nodeMapping))
+	for _, m := range tc.nodeMapping {
+		allPeers = append(allPeers, m.peerInfo)
+	}
+
+	agent, err := tc.GetAgent(nodeID)
+	if err != nil {
+		return err
+	}
+	// Update nodes' discovery
+	if agent != nil && agent.discovery != nil {
+		agent.discovery.UpdatePeers(allPeers)
+	}
+
 	return nil
 }
 
@@ -580,13 +657,14 @@ func TestClusterFormationAndQuorum(t *testing.T) {
 
 	// Add 3 nodes with proper peer and voter configuration
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
 	}
-
+	cl.UpdateAllNodesDiscoveries()
 	// Start all nodes
 	for _, nodeID := range voters {
 		err := cl.StartNode(nodeID)
@@ -672,13 +750,14 @@ func TestLeaderCrashAndReelection(t *testing.T) {
 
 	// Add 3 nodes
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
 	}
-
+	cl.UpdateAllNodesDiscoveries()
 	// Start all nodes
 	for _, nodeID := range voters {
 		err := cl.StartNode(nodeID)
@@ -766,13 +845,14 @@ func TestReplication(t *testing.T) {
 
 	// Add 3 nodes
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
 	}
-
+	cl.UpdateAllNodesDiscoveries()
 	// Start all nodes
 	for _, nodeID := range voters {
 		err := cl.StartNode(nodeID)
@@ -945,15 +1025,18 @@ func TestNewNodeCatchesUp(t *testing.T) {
 
 	// Create and start initial 3 nodes
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
+	}
+	cl.UpdateAllNodesDiscoveries()
+	for _, nodeID := range voters {
 		err = cl.StartNode(nodeID)
 		require.NoError(t, err)
 	}
-
 	// Wait for cluster to form
 	err = cl.WaitForClusterFormed(10 * time.Second)
 	require.NoError(t, err)
@@ -973,7 +1056,7 @@ func TestNewNodeCatchesUp(t *testing.T) {
 				Job: model.Job{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
-					Data:  []byte(fmt.Sprintf("payload-%d", i)),
+					Data:  fmt.Appendf(nil, "payload-%d", i),
 				},
 			},
 			RespInfo: &model.RespInfo{
@@ -997,6 +1080,8 @@ func TestNewNodeCatchesUp(t *testing.T) {
 	newNodeID := "node4"
 	err = cl.AddNode(newNodeID, false, 0, 0, 0)
 	require.NoError(t, err)
+
+	cl.UpdateAllNodesDiscoveries()
 
 	// Start the new node - it should catch up
 	startTime := time.Now()
@@ -1076,11 +1161,15 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 	require.NoError(t, err)
 
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
+	}
+	cl.UpdateAllNodesDiscoveries()
+	for _, nodeID := range voters {
 		err = cl.StartNode(nodeID)
 		require.NoError(t, err)
 	}
@@ -1113,6 +1202,7 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 	// Get current state
 	leaderID, _ := cl.GetLeaderID()
 	leaderAgent, _ := cl.GetAgent(leaderID)
+	time.Sleep(2 * time.Second)
 	curIndex := leaderAgent.GetLastAppliedIndex()
 
 	// Stop a follower
@@ -1133,7 +1223,7 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 				Job: model.Job{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
-					Data:  []byte(fmt.Sprintf("payload-%d", i)),
+					Data:  fmt.Appendf(nil, "payload-%d", i),
 				},
 			},
 			RespInfo: &model.RespInfo{
@@ -1145,10 +1235,12 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	time.Sleep(2 * time.Second)
 	// Restart the stopped node
 	useExistingFiles := true
 	err = cl.AddNode(stoppedNode, useExistingFiles, 0, 0, 0)
 	require.NoError(t, err)
+	cl.UpdateAllNodesDiscoveries()
 	err = cl.StartNode(stoppedNode)
 	require.NoError(t, err)
 
@@ -1179,11 +1271,15 @@ func TestClusterMembershipChanges(t *testing.T) {
 	require.NoError(t, err)
 
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
+	}
+	cl.UpdateAllNodesDiscoveries()
+	for _, nodeID := range voters {
 		err = cl.StartNode(nodeID)
 		require.NoError(t, err)
 	}
@@ -1223,6 +1319,7 @@ func TestClusterMembershipChanges(t *testing.T) {
 	// Add node4 as learner
 	err = cl.AddNode("node4", false, 0, 0, 0)
 	require.NoError(t, err)
+	cl.UpdateAllNodesDiscoveries()
 	err = cl.StartNode("node4")
 	require.NoError(t, err)
 
@@ -1297,16 +1394,19 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 	)
 
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	// Setup cluster
 	for _, id := range voters {
 		err := cl.AddNode(id, false, snapshotIntervalSec, snapshotTriggerCount, walFlushThreshold)
 		assert.NoError(t, err)
+	}
+	cl.UpdateAllNodesDiscoveries()
+	for _, id := range voters {
 		err = cl.StartNode(id)
 		assert.NoError(t, err)
 	}
-
 	assert.NoError(t, cl.WaitForClusterFormed(10*time.Second))
 
 	leaderID, err := cl.GetLeaderID()
@@ -1411,6 +1511,7 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 	assert.NoError(t, cl.RemoveNode(followerID))
 
 	assert.NoError(t, cl.AddNode(followerID, true, snapshotIntervalSec, snapshotTriggerCount, walFlushThreshold))
+	cl.UpdateAllNodesDiscoveries()
 	assert.NoError(t, cl.StartNode(followerID))
 
 	assert.NoError(t, cl.WaitForNodeCatchUp(followerID, 15*time.Second))
@@ -1435,13 +1536,14 @@ func TestTlRotateAndRetringConnections(t *testing.T) {
 
 	// Add 3 nodes with proper peer and voter configuration
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
 	}
-
+	cl.UpdateAllNodesDiscoveries()
 	// Start all nodes
 	for _, nodeID := range voters {
 		err := cl.StartNode(nodeID)
@@ -1506,162 +1608,6 @@ func TestTlRotateAndRetringConnections(t *testing.T) {
 }
 
 // ------------------------------------------------
-// TLS Rotate
-// ------------------------------------------------
-func TestSynPeers(t *testing.T) {
-	// Create test cluster with 3 nodes
-	cl, err := NewTestCluster(t)
-	require.NoError(t, err)
-
-	// Add 3 nodes with proper peer and voter configuration
-	voters := []string{"node1", "node2", "node3"}
-	cl.SetInitialVoters(voters)
-
-	for _, nodeID := range voters {
-		err := cl.AddNode(nodeID, false, 0, 0, 0)
-		require.NoError(t, err)
-	}
-
-	// Start all nodes
-	for _, nodeID := range voters {
-		err := cl.StartNode(nodeID)
-		require.NoError(t, err)
-	}
-
-	// Wait for cluster to form
-	err = cl.WaitForClusterFormed(5 * time.Second)
-	require.NoError(t, err, "cluster should form within timeout")
-
-	// Verify leader is elected
-	leaderID, err := cl.GetLeaderID()
-	require.NoError(t, err, "should have a leader")
-	t.Logf("Leader elected: %s", leaderID)
-
-	allKnowLeader := cl.AssertAllNodesKnowLeader()
-	require.True(t, allKnowLeader, "should have a leader")
-
-	// Verify leader status
-	leaderAgent, err := cl.GetAgent(leaderID)
-	require.NoError(t, err)
-	assert.Equal(t, model.NodeStatusLeaderActive, leaderAgent.GetStatus(),
-		"leader should have LeaderActive status")
-
-	// Verify followers
-	followers := cl.GetFollowerIDs()
-	assert.Len(t, followers, 2, "should have 2 followers")
-
-	for _, followerID := range followers {
-		followerAgent, err := cl.GetAgent(followerID)
-		require.NoError(t, err)
-		assert.Equal(t, model.NodeStatusFollowerActive, followerAgent.GetStatus(),
-			"follower %s should have FollowerActive status", followerID)
-	}
-	// update a followers peers list to have less peers
-	followerA, _ := cl.GetAgent(followers[0])
-	peers := followerA.discovery.ListPeersAddrServerName()
-	var nodeIds []string
-	skipped := false
-	for _, peer := range peers {
-		if !skipped && peer.NodeId != followerA.nodeID {
-			skipped = true
-			continue // Skip one non-matching peer
-		}
-		nodeIds = append(nodeIds, peer.NodeId)
-	}
-	_, _ = followerA.handleUpdatePeersList(nodeIds)
-
-	// Wait for sync connection
-	time.Sleep(3 * time.Second)
-
-	// Verify peers list is fully synced again
-	syncedPeers := followerA.discovery.ListPeers()
-	require.Equal(t, len(voters), len(syncedPeers))
-
-}
-
-// ------------------------------------------------
-// Update Peers List Command
-// ------------------------------------------------
-func TestUpdatePeersListCommand(t *testing.T) {
-	// Create test cluster with 3 nodes
-	cl, err := NewTestCluster(t)
-	require.NoError(t, err)
-
-	// Add 3 nodes with proper peer and voter configuration
-	voters := []string{"node1", "node2", "node3"}
-	cl.SetInitialVoters(voters)
-
-	for _, nodeID := range voters {
-		err := cl.AddNode(nodeID, false, 0, 0, 0)
-		require.NoError(t, err)
-	}
-
-	// Start all nodes
-	for _, nodeID := range voters {
-		err := cl.StartNode(nodeID)
-		require.NoError(t, err)
-	}
-
-	// Wait for cluster to form
-	err = cl.WaitForClusterFormed(5 * time.Second)
-	require.NoError(t, err, "cluster should form within timeout")
-
-	// Verify leader is elected
-	leaderID, err := cl.GetLeaderID()
-	require.NoError(t, err, "should have a leader")
-	t.Logf("Leader elected: %s", leaderID)
-
-	allKnowLeader := cl.AssertAllNodesKnowLeader()
-	require.True(t, allKnowLeader, "should have a leader")
-
-	// Verify leader status
-	leaderAgent, err := cl.GetAgent(leaderID)
-	require.NoError(t, err)
-	assert.Equal(t, model.NodeStatusLeaderActive, leaderAgent.GetStatus(),
-		"leader should have LeaderActive status")
-
-	leaderTestNode, err := cl.GetNode(leaderID)
-	require.NoError(t, err)
-	_ = cl.getOrCreateMapping("node4")
-	_ = cl.getOrCreateMapping("node5")
-	var updateList []string
-	for _, mapping := range cl.nodeMapping {
-		updateList = append(updateList, mapping.internalID)
-	}
-
-	select {
-	case leaderTestNode.commandCh <- model.Command{
-		Type:      model.CmdUpdatePeersList,
-		ProposeID: 0,
-		Peers: &model.PeersListPayload{
-			Peers: updateList,
-		},
-	}:
-	default:
-		t.Fatal("failed to send CmdUpdatePeersList command to leader channel")
-	}
-
-	time.Sleep(1 * time.Second)
-
-	// Verify followers
-	followers := cl.GetFollowerIDs()
-	assert.Len(t, followers, 2, "should have 2 followers")
-
-	for _, followerID := range followers {
-		followerAgent, err := cl.GetAgent(followerID)
-		require.NoError(t, err)
-		assert.Equal(t, model.NodeStatusFollowerActive, followerAgent.GetStatus(),
-			"follower %s should have FollowerActive status", followerID)
-
-		ul := followerAgent.discovery.ListPeers()
-		slices.Sort(ul)
-		slices.Sort(updateList)
-		require.True(t, reflect.DeepEqual(updateList, ul))
-	}
-
-}
-
-// ------------------------------------------------
 // Transfer Leader Command
 // ------------------------------------------------
 func TestTransferLeaderCommand(t *testing.T) {
@@ -1671,13 +1617,14 @@ func TestTransferLeaderCommand(t *testing.T) {
 
 	// Add 3 nodes with proper peer and voter configuration
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
 	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
 	}
-
+	cl.UpdateAllNodesDiscoveries()
 	// Start all nodes
 	for _, nodeID := range voters {
 		err := cl.StartNode(nodeID)
@@ -1743,138 +1690,234 @@ func TestTransferLeaderCommand(t *testing.T) {
 }
 
 // ------------------------------------------------
-// Gossip Discovery with Partial Initial Peers
+// Update Peers List Command
 // ------------------------------------------------
-func TestGossipDiscoveryWithPartialPeers(t *testing.T) {
+func TestUpdatePeersListCommand(t *testing.T) {
+	// Create test cluster with 3 nodes
 	cl, err := NewTestCluster(t)
 	require.NoError(t, err)
 
-	// Start node1 and node2 with full cluster view
+	// Add 3 nodes with proper peer and voter configuration
 	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
 	cl.SetInitialVoters(voters)
 
-	for _, nodeID := range []string{"node1", "node2"} {
+	for _, nodeID := range voters {
 		err := cl.AddNode(nodeID, false, 0, 0, 0)
 		require.NoError(t, err)
-		err = cl.StartNode(nodeID)
+	}
+	cl.UpdateAllNodesDiscoveries()
+	// Start all nodes
+	for _, nodeID := range voters {
+		err := cl.StartNode(nodeID)
 		require.NoError(t, err)
 	}
 
-	// Wait for 2-node cluster
+	// Wait for cluster to form
 	err = cl.WaitForClusterFormed(5 * time.Second)
+	require.NoError(t, err, "cluster should form within timeout")
+
+	// Verify leader is elected
+	leaderID, err := cl.GetLeaderID()
+	require.NoError(t, err, "should have a leader")
+	t.Logf("Leader elected: %s", leaderID)
+
+	allKnowLeader := cl.AssertAllNodesKnowLeader()
+	require.True(t, allKnowLeader, "should have a leader")
+
+	// Verify leader status
+	leaderAgent, err := cl.GetAgent(leaderID)
 	require.NoError(t, err)
-	t.Log("2-node cluster formed")
+	assert.Equal(t, model.NodeStatusLeaderActive, leaderAgent.GetStatus(),
+		"leader should have LeaderActive status")
 
-	node1ID := cl.nodeMapping["node1"].internalID
-	node2ID := cl.nodeMapping["node2"].internalID
-
-	// Add node3 with ONLY node1 as initial peer
-	err = cl.AddNode("node3", false, 0, 0, 0, []string{"node1"})
-	require.NoError(t, err)
-
-	// Verify node3 was configured correctly with only node1 as peer
-	node3Agent, err := cl.GetAgent("node3")
-	require.NoError(t, err)
-	initialPeers := node3Agent.discovery.ListPeers()
-
-	// Node3 should initially only know about node1 (not node2)
-	assert.Contains(t, initialPeers, node1ID, "node3 should know node1 initially")
-	assert.NotContains(t, initialPeers, node2ID, "node3 should NOT know node2 initially")
-	t.Logf("Node3 initial peers (only node1): %v", initialPeers)
-
-	// Start node3
-	err = cl.StartNode("node3")
+	leaderTestNode, _ := cl.GetNode(leaderID)
 	require.NoError(t, err)
 
-	// Wait for node3 to discover node2 via gossip AND full cluster formation
-	t.Log("Waiting for node3 to discover node2 via gossip...")
-	deadline := time.Now().Add(15 * time.Second)
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-
-	var discoveredPeers []string
-	node2Discovered := false
-	for time.Now().Before(deadline) {
-		agent, err := cl.GetAgent("node3")
-		require.NoError(t, err)
-
-		discoveredPeers = agent.discovery.ListPeers()
-
-		for _, peer := range discoveredPeers {
-			if peer == node2ID {
-				node2Discovered = true
-				break
-			}
-		}
-
-		if node2Discovered {
-			t.Logf("Node3 discovered node2 via gossip! Peers: %v", discoveredPeers)
-			break
-		}
-
-		<-ticker.C
+	node4 := cl.getOrCreateMapping("node4")
+	var updateList []model.PeerInfo
+	updateList = append(updateList, node4.peerInfo)
+	for _, mapping := range cl.nodeMapping {
+		updateList = append(updateList, mapping.peerInfo)
 	}
-
-	require.True(t, node2Discovered, "node3 should have discovered node2 via gossip")
-	assert.Contains(t, discoveredPeers, node1ID, "node3 should still know node1")
-
-	// Now wait for full cluster formation (all 3 nodes active and know leader)
-	err = cl.WaitForClusterFormed(10 * time.Second)
-	require.NoError(t, err, "all 3 nodes should form cluster")
-
-	// Verify all nodes know each other (this is the key gossip validation)
-	t.Log("Verifying all nodes know each other through gossip...")
-	for _, nodeID := range []string{"node1", "node2", "node3"} {
-		agent, err := cl.GetAgent(nodeID)
-		require.NoError(t, err)
-		peers := agent.discovery.ListPeers()
-
-		// Each node should know both other nodes
-		expectedPeers := []string{node1ID, node2ID, cl.nodeMapping[nodeID].internalID}
-		for _, expected := range expectedPeers {
-			assert.Contains(t, peers, expected,
-				"node %s should know peer %s, but only knows: %v",
-				nodeID, expected, peers)
-		}
-		t.Logf("Node %s knows peers: %v", nodeID, peers)
-	}
-
-	// Verify cluster can process commands (final health check)
-	t.Log("Verifying cluster health with a command...")
-	ctx := context.Background()
-	respCh := make(chan model.ToProducerResponse, 1)
-	cmd := model.Command{
-		Type: model.CmdAddJob,
-		AddJob: &model.AddJobPayload{
-			Job: model.Job{
-				ID:    "test-gossip",
-				Topic: "test-topic",
-				Data:  []byte("gossip-test"),
-			},
-		},
-		RespInfo: &model.RespInfo{
-			RequestID: "gossip-test",
-			RespCh:    respCh,
-		},
-	}
-
-	err = cl.Propose(ctx, cmd)
-	require.NoError(t, err)
 
 	select {
-	case respInfo := <-respCh:
-		require.Equal(t, "success", string(respInfo.Status))
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for command")
+	case leaderTestNode.commandCh <- model.Command{
+		Type:      model.CmdUpdatePeersList,
+		ProposeID: 0,
+		Peers: &model.PeersListPayload{
+			Peers: updateList,
+		},
+	}:
+	default:
+		t.Fatal("failed to send CmdUpdatePeersList command to leader channel")
 	}
 
-	// Quick check that command was applied
-	time.Sleep(1 * time.Second)
-	lid, err := cl.GetLeaderID()
-	require.NoError(t, err)
-	leaderAgent, err := cl.GetAgent(lid)
-	require.NoError(t, err)
-	assert.Greater(t, leaderAgent.GetLastAppliedIndex(), uint64(0), "command should have been applied")
+	time.Sleep(2 * time.Second)
 
-	t.Log("✓ Gossip discovery test passed - node3 discovered full cluster with only partial initial peers")
+	// Verify followers
+	followers := cl.GetFollowerIDs()
+	assert.Len(t, followers, 2, "should have 2 followers")
+
+	for _, followerID := range followers {
+		followerAgent, err := cl.GetAgent(followerID)
+		require.NoError(t, err)
+		assert.Equal(t, model.NodeStatusFollowerActive, followerAgent.GetStatus(),
+			"follower %s should have FollowerActive status", followerID)
+
+		ul := followerAgent.discovery.ListPeers()
+		slices.SortFunc(ul, func(a, b model.PeerInfo) int { return strings.Compare(a.NodeID, b.NodeID) })
+		slices.SortFunc(updateList, func(a, b model.PeerInfo) int { return strings.Compare(a.NodeID, b.NodeID) })
+		require.True(t, reflect.DeepEqual(updateList, ul))
+	}
+
+}
+
+// ------------------------------------------------
+// Sync Peers
+// ------------------------------------------------
+func TestSyncPeers(t *testing.T) {
+	// Create test cluster with 3 nodes
+	cl, err := NewTestCluster(t)
+	require.NoError(t, err)
+
+	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters[:2])
+	cl.SetInitialVoters(voters[:2])
+
+	for _, nodeID := range voters[:2] {
+		err := cl.AddNode(nodeID, false, 0, 0, 0)
+		require.NoError(t, err)
+	}
+	cl.UpdateAllNodesDiscoveries()
+	// Start all nodes
+	for _, nodeID := range voters[:2] {
+		err := cl.StartNode(nodeID)
+		require.NoError(t, err)
+	}
+
+	// Wait for cluster to form
+	err = cl.WaitForClusterFormed(5 * time.Second)
+	require.NoError(t, err, "cluster should form within timeout")
+
+	// Verify leader is elected
+	leaderID, err := cl.GetLeaderID()
+	require.NoError(t, err, "should have a leader")
+	t.Logf("Leader elected: %s", leaderID)
+
+	allKnowLeader := cl.AssertAllNodesKnowLeader()
+	require.True(t, allKnowLeader, "should have a leader")
+
+	// Verify leader status
+	leaderAgent, err := cl.GetAgent(leaderID)
+	require.NoError(t, err)
+	assert.Equal(t, model.NodeStatusLeaderActive, leaderAgent.GetStatus(),
+		"leader should have LeaderActive status")
+
+	// up to this point we have a cluster of two nodes that do not know third node
+
+	err = cl.AddNode(voters[2], false, 0, 0, 0, voters) // node3 knows others
+	require.NoError(t, err)
+
+	err = cl.StartNode(voters[2])
+	require.NoError(t, err)
+
+	// Wait for sync connection
+	time.Sleep(5 * time.Second)
+
+	// node3 should have 2 outgoing connection to other nodes
+	node3, err := cl.GetAgent(voters[2])
+	require.NoError(t, err)
+	syncedPeers := node3.discovery.ListPeers()
+	require.Equal(t, len(voters), len(syncedPeers))
+	ougoing := node3.quicServer.GetActiveOutgoingNodes()
+	require.Equal(t, 2, len(ougoing))
+
+	// other nodes should have incoming connection from node3
+	for _, v := range voters[:2] {
+		n, err := cl.GetAgent(v)
+		require.NoError(t, err)
+		in := n.quicServer.GetActiveIncomingNodes()
+		require.Equal(t, 2, len(in))
+	}
+
+	// other node should find node3
+	for _, nodeID := range voters[:2] {
+		n, err := cl.GetAgent(nodeID)
+		require.NoError(t, err)
+		ougoing := n.quicServer.GetActiveOutgoingNodes()
+		require.Equal(t, 2, len(ougoing))
+	}
+
+}
+
+// ------------------------------------------------
+// Peers List Query - nodes with len(outgoing) < len(incoming)
+// ------------------------------------------------
+func TestPeersListQuery(t *testing.T) {
+	// Create test cluster with 3 nodes
+	cl, err := NewTestCluster(t)
+	require.NoError(t, err)
+
+	voters := []string{"node1", "node2", "node3"}
+	cl.UpsertTestClusterPeers(voters)
+	cl.SetInitialVoters(voters)
+
+	for _, nodeID := range voters {
+		err := cl.AddNode(nodeID, false, 0, 0, 0)
+		require.NoError(t, err)
+	}
+	cl.UpdateAllNodesDiscoveries()
+	// Start all nodes
+	for _, nodeID := range voters {
+		err := cl.StartNode(nodeID)
+		require.NoError(t, err)
+	}
+
+	// Wait for cluster to form
+	err = cl.WaitForClusterFormed(5 * time.Second)
+	require.NoError(t, err, "cluster should form within timeout")
+
+	// Verify leader is elected
+	leaderID, err := cl.GetLeaderID()
+	require.NoError(t, err, "should have a leader")
+	t.Logf("Leader elected: %s", leaderID)
+
+	allKnowLeader := cl.AssertAllNodesKnowLeader()
+	require.True(t, allKnowLeader, "should have a leader")
+
+	// Verify leader status
+	leaderAgent, err := cl.GetAgent(leaderID)
+	require.NoError(t, err)
+	assert.Equal(t, model.NodeStatusLeaderActive, leaderAgent.GetStatus(),
+		"leader should have LeaderActive status")
+
+	followers := cl.GetFollowerIDs()
+	assert.Len(t, followers, 2, "should have 2 followers")
+
+	leaderPeers := leaderAgent.discovery.ListPeers()
+	var peers []model.PeerInfo
+	followerA, err := cl.GetAgent(followers[0])
+	require.NoError(t, err)
+	for _, pi := range leaderPeers {
+		if pi.NodeID == followerA.nodeID {
+			continue
+		}
+		peers = append(peers, pi)
+	}
+	followerB, err := cl.GetAgent(followers[1])
+	require.NoError(t, err)
+	followerB.discovery.UpdatePeers(peers)
+	con, ok := followerB.quicServer.outgoingConns[followerA.nodeID]
+	require.True(t, ok)
+	err = con.CloseWithError(0, "for test")
+	require.NoError(t, err)
+
+	time.Sleep(3 * time.Second)
+
+	p := followerB.discovery.ListPeers()
+	require.Equal(t, 3, len(p))
+
+	_, err = followerB.quicServer.outgoingConns[followerA.nodeID].OpenStream()
+	require.NoError(t, err)
 }

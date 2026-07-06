@@ -32,7 +32,6 @@ import (
 	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/state"
 	"github.com/m-javani/cue/internal/utils"
-	"github.com/m-javani/cue/pkg/verifier"
 	"github.com/quic-go/quic-go"
 	"github.com/vmihailenco/msgpack/v5"
 	"go.uber.org/zap"
@@ -703,7 +702,6 @@ type Gateway struct {
 	currentTerm     *atomic.Uint64
 	members         *model.Members
 	mu              sync.RWMutex
-	tlsVerifier     verifier.TLSVerifier
 }
 
 func (g *Gateway) Addr() net.Addr {
@@ -772,7 +770,6 @@ func NewGateway(
 	currentTerm *atomic.Uint64,
 	members *model.Members,
 	leaderID *atomic.Value,
-	tlsVerifier verifier.TLSVerifier,
 ) (*Gateway, error) {
 	// Parse listen address
 	addr, err := net.ResolveUDPAddr("udp", listenAddr)
@@ -901,10 +898,6 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 		_ = conn.CloseWithError(0, "no client certificate")
 		return
 	}
-	rawCerts := make([][]byte, len(connState.TLS.PeerCertificates))
-	for i, cert := range connState.TLS.PeerCertificates {
-		rawCerts[i] = cert.Raw
-	}
 
 	// Accept first stream for handshake
 	stream, err := conn.AcceptStream(handshakeCtx)
@@ -924,14 +917,6 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 		_ = conn.CloseWithError(0, "invalid handshake")
 		g.metrics.ConnectionFailed()
 		return
-	}
-
-	// Authorize: verify the certificate matches the claimed nodeID
-	if g.tlsVerifier != nil {
-		if err := g.tlsVerifier.VerifyPeer(rawCerts, handshake.ProxyID); err != nil {
-			_ = conn.CloseWithError(0, "tls authorization failed")
-			return
-		}
 	}
 
 	// Validate handshake
