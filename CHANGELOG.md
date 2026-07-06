@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.0] - 2026-07-06
+### Changed
+- **BREAKING**: Redesigned service discovery architecture
+- Decoupled node identity from discovery and TLS verification
+- Removed discovery resolver and TLS verifier
+- Added dependency on external HTTP server for discovery
+- Added static discovery as fallback mechanism
+- Updated sync connections, self-discovery functions, and configs
+- Updated models and tests to align with new architecture
+
 ## [0.2.0] - 2026-07-01
 ### Changed
 - Refactored dispatch queue to simple process queue for better performance
