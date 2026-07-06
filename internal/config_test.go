@@ -26,6 +26,7 @@ import (
 )
 
 // Helper to create a valid config YAML
+// Helper to create a valid config YAML
 func validConfigYAML() string {
 	return `
 node_id: node-1
@@ -39,20 +40,14 @@ cluster:
   raft_tick_ms: 100
   raft_heartbeat_tick: 5
   raft_election_tick: 20
+  discovery_kind: static
+  discovery_yml_path: /tmp/discovery.yml
 proxy:
   addr: 0.0.0.0
   port: 8322
   cert_path: /certs/proxy-cert.pem
   key_path: /certs/proxy-key.pem
   ca_path: /certs/proxy-ca.pem
-address_resolver:
-  type: dns
-  config:
-    domain: example.com
-tls_verifier:
-  type: dns
-  config:
-    domain: example.com
 api:
   timeout_seconds: 30
 partition:
@@ -89,43 +84,8 @@ proxy:
   cert_path: /certs/proxy-cert.pem
   key_path: /certs/proxy-key.pem
   ca_path: /certs/proxy-ca.pem
-address_resolver:
-  type: dns
-  config:
-    domain: example.com
-tls_verifier:
-  type: dns
-  config:
-    domain: example.com
 `,
 			expectError: false,
-		},
-		{
-			name: "invalid address resolver type",
-			cfgContent: `
-node_id: node-1
-data_dir: /tmp/data
-cluster:
-  cert_path: /certs/cert.pem
-  key_path: /certs/key.pem
-  ca_path: /certs/ca.pem
-  raft_tick_ms: 100
-  raft_heartbeat_tick: 5
-  raft_election_tick: 20
-proxy:
-  cert_path: /certs/proxy-cert.pem
-  key_path: /certs/proxy-key.pem
-  ca_path: /certs/proxy-ca.pem
-address_resolver:
-  type: invalid
-  config: {}
-tls_verifier:
-  type: dns
-  config:
-    domain: example.com
-`,
-			expectError:  true,
-			errorStrings: []string{"unknown address_resolver type"},
 		},
 		{
 			name: "multiple validation errors",
@@ -139,12 +99,6 @@ cluster:
   raft_election_tick: 20
 proxy:
   port: 99999
-address_resolver:
-  type: dns
-  config: {}
-tls_verifier:
-  type: invalid
-  config: {}
 `,
 			expectError: true,
 			errorStrings: []string{
@@ -152,8 +106,6 @@ tls_verifier:
 				"proxy.port must be between 1 and 65535",
 				"cluster TLS paths cannot be empty",
 				"proxy TLS paths cannot be empty",
-				"address_resolver dns requires 'domain' in config",
-				"unknown tls_verifier type",
 			},
 		},
 	}
@@ -192,6 +144,8 @@ func TestValidateAggregatedErrors(t *testing.T) {
 			CertPath:          "/certs/cert.pem",
 			KeyPath:           "/certs/key.pem",
 			CACertPath:        "/certs/ca.pem",
+			DiscoveryKind:     "static",
+			DiscoveryYMLPath:  "/tmp/discovery.yml",
 		},
 		Proxy: ProxyConfig{
 			Port:     8322,
@@ -201,18 +155,6 @@ func TestValidateAggregatedErrors(t *testing.T) {
 		},
 		ApiConfig: ApiConfig{
 			TimeoutSeconds: 30,
-		},
-		AddressResolver: ResolverConfig{
-			Type: "dns",
-			Config: map[string]any{
-				"domain": "example.com",
-			},
-		},
-		TLSVerifier: VerifierConfig{
-			Type: "dns",
-			Config: map[string]any{
-				"domain": "example.com",
-			},
 		},
 		Partition: PartitionConfig{
 			PartitionTickMs:     100,
@@ -250,9 +192,10 @@ func TestValidateAggregatedErrors(t *testing.T) {
 				c.Proxy.Port = 99999
 				c.Cluster.CertPath = ""
 				c.Proxy.CertPath = ""
-				c.AddressResolver.Type = "invalid"
-				c.TLSVerifier.Type = "invalid"
 				c.Partition.PartitionTickMs = 0
+				c.Cluster.DiscoveryKind = "http"
+				c.Cluster.DiscoveryYMLPath = "" // Should be ignored for http
+				// Missing DiscoveryHTTPHost will cause error
 			},
 			expectError: true,
 			errorStrings: []string{
@@ -261,9 +204,8 @@ func TestValidateAggregatedErrors(t *testing.T) {
 				"proxy.port must be between 1 and 65535",
 				"cluster TLS paths cannot be empty",
 				"proxy TLS paths cannot be empty",
-				"unknown address_resolver type",
-				"unknown tls_verifier type",
 				"internal error: partition.partition_tick_ms not set",
+				"discovery_http_host is required when discovery_kind=http",
 			},
 		},
 		{
@@ -296,51 +238,6 @@ func TestValidateAggregatedErrors(t *testing.T) {
 				"raft_heartbeat_tick must be between 1 and 100 (got 0)",
 				// Note: election comparison is skipped when heartbeat is 0
 			},
-		},
-		{
-			name: "invalid resolver and verifier configs",
-			mutate: func(c *Config) {
-				c.AddressResolver.Type = "service"
-				c.AddressResolver.Config = map[string]any{
-					"domain": "example.com", // service shouldn't have domain
-				}
-				c.TLSVerifier.Type = "cn"
-				c.TLSVerifier.Config = map[string]any{
-					"extra": "value", // cn shouldn't have config
-				}
-			},
-			expectError: true,
-			errorStrings: []string{
-				"address_resolver service should not contain 'domain' in config",
-				"tls_verifier cn does not accept config fields",
-			},
-		},
-		{
-			name: "spiffe missing trust_domain",
-			mutate: func(c *Config) {
-				c.TLSVerifier.Type = "spiffe"
-				c.TLSVerifier.Config = map[string]any{}
-			},
-			expectError:  true,
-			errorStrings: []string{"tls_verifier spiffe requires 'trust_domain' in config"},
-		},
-		{
-			name: "dns resolver missing domain",
-			mutate: func(c *Config) {
-				c.AddressResolver.Type = "dns"
-				c.AddressResolver.Config = map[string]any{}
-			},
-			expectError:  true,
-			errorStrings: []string{"address_resolver dns requires 'domain' in config"},
-		},
-		{
-			name: "static resolver missing peers",
-			mutate: func(c *Config) {
-				c.AddressResolver.Type = "static"
-				c.AddressResolver.Config = map[string]any{}
-			},
-			expectError:  true,
-			errorStrings: []string{"address_resolver static requires 'peers' map in config"},
 		},
 	}
 
@@ -505,6 +402,9 @@ func TestDefaults(t *testing.T) {
 		"cluster.snapshot_trigger_count":  10000,
 		"cluster.wal_flush_threshold":     1000,
 		"cluster.dlq_max_size_bytes":      DefaultDLQMaxSizeBytes,
+		"cluster.discovery_kind":          "static",
+		"cluster.discovery_yml_path":      "./discovery.yml",
+		"cluster.discovery_http_host":     "",
 		"proxy.addr":                      "0.0.0.0",
 		"proxy.port":                      8322,
 		"api.listen_addr":                 "0.0.0.0",
@@ -528,6 +428,181 @@ func TestDefaults(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			val := viper.Get(key)
 			assert.EqualValues(t, expected, val)
+		})
+	}
+}
+
+func TestValidateDiscoveryConfig(t *testing.T) {
+	tests := []struct {
+		name         string
+		cfg          *ClusterConfig
+		expectError  bool
+		errorStrings []string
+	}{
+		{
+			name: "valid static discovery",
+			cfg: &ClusterConfig{
+				DiscoveryKind:    "static",
+				DiscoveryYMLPath: "/tmp/discovery.yml",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid http discovery",
+			cfg: &ClusterConfig{
+				DiscoveryKind:     "http",
+				DiscoveryHTTPHost: "http://discovery-service:8080",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid static discovery - uppercase",
+			cfg: &ClusterConfig{
+				DiscoveryKind:    "STATIC",
+				DiscoveryYMLPath: "/tmp/discovery.yml",
+			},
+			expectError: false,
+		},
+		{
+			name: "valid http discovery - mixed case",
+			cfg: &ClusterConfig{
+				DiscoveryKind:     "Http",
+				DiscoveryHTTPHost: "http://discovery-service:8080",
+			},
+			expectError: false,
+		},
+		{
+			name: "invalid discovery kind",
+			cfg: &ClusterConfig{
+				DiscoveryKind: "invalid",
+			},
+			expectError:  true,
+			errorStrings: []string{"unknown discovery kind: invalid"},
+		},
+		{
+			name: "static discovery missing yml path",
+			cfg: &ClusterConfig{
+				DiscoveryKind: "static",
+			},
+			expectError:  true,
+			errorStrings: []string{"discovery_yml_path is required when discovery_kind=static"},
+		},
+		{
+			name: "http discovery missing http host",
+			cfg: &ClusterConfig{
+				DiscoveryKind: "http",
+			},
+			expectError:  true,
+			errorStrings: []string{"discovery_http_host is required when discovery_kind=http"},
+		},
+		{
+			name: "empty discovery kind defaults to static - missing yml path",
+			cfg: &ClusterConfig{
+				DiscoveryKind: "",
+			},
+			expectError:  true,
+			errorStrings: []string{"unknown discovery kind: "},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDiscoveryConfig(tt.cfg)
+
+			if tt.expectError {
+				require.Error(t, err)
+				for _, expected := range tt.errorStrings {
+					assert.Contains(t, err.Error(), expected)
+				}
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryKindHelpers(t *testing.T) {
+	tests := []struct {
+		name             string
+		cfg              *Config
+		expectedKind     DiscoveryKind
+		expectedStatic   bool
+		expectedHttp     bool
+		expectParseError bool
+	}{
+		{
+			name: "static discovery",
+			cfg: &Config{
+				Cluster: ClusterConfig{
+					DiscoveryKind: "static",
+				},
+			},
+			expectedKind:     DiscoveryKindStatic,
+			expectedStatic:   true,
+			expectedHttp:     false,
+			expectParseError: false,
+		},
+		{
+			name: "http discovery",
+			cfg: &Config{
+				Cluster: ClusterConfig{
+					DiscoveryKind: "http",
+				},
+			},
+			expectedKind:     DiscoveryKindHttp,
+			expectedStatic:   false,
+			expectedHttp:     true,
+			expectParseError: false,
+		},
+		{
+			name: "uppercase static",
+			cfg: &Config{
+				Cluster: ClusterConfig{
+					DiscoveryKind: "STATIC",
+				},
+			},
+			expectedKind:     DiscoveryKindStatic,
+			expectedStatic:   true,
+			expectedHttp:     false,
+			expectParseError: false,
+		},
+		{
+			name: "mixed case http",
+			cfg: &Config{
+				Cluster: ClusterConfig{
+					DiscoveryKind: "Http",
+				},
+			},
+			expectedKind:     DiscoveryKindHttp,
+			expectedStatic:   false,
+			expectedHttp:     true,
+			expectParseError: false,
+		},
+		{
+			name: "invalid discovery kind",
+			cfg: &Config{
+				Cluster: ClusterConfig{
+					DiscoveryKind: "invalid",
+				},
+			},
+			expectedKind:     DiscoveryKindStatic,
+			expectedStatic:   false,
+			expectedHttp:     false,
+			expectParseError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kind, err := ParseDiscoveryKind(tt.cfg.Cluster.DiscoveryKind)
+			if tt.expectParseError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.expectedKind, kind)
+			assert.Equal(t, tt.expectedStatic, kind == DiscoveryKindStatic)
+			assert.Equal(t, tt.expectedHttp, kind == DiscoveryKindHttp)
 		})
 	}
 }

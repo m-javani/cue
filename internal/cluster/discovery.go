@@ -16,69 +16,219 @@ package cluster
 
 import (
 	"context"
-	"slices"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/m-javani/cue/internal"
+	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/utils"
-	"github.com/m-javani/cue/pkg/discovery"
+	"github.com/stretchr/testify/assert/yaml"
 	"go.uber.org/zap"
 )
 
+// httpPeersResponse for versioned HTTP discovery protocol
+type httpPeersResponse struct {
+	Version int              `json:"version"`
+	Peers   []model.PeerInfo `json:"peers"`
+}
+
 // ServiceDiscovery manages peer discovery and RAFT ID mappings
 type ServiceDiscovery struct {
-	selfNodeID       string
-	peers            *sync.RWMutex
-	peersList        []string
-	peersRaftIDs     *sync.RWMutex
-	peersRaftIDsList []uint64
-	nodeToRaft       *sync.RWMutex
-	nodeToRaftMap    map[string]uint64
-	raftToNode       *sync.RWMutex
-	raftToNodeMap    map[uint64]string
-	quicPort         uint16
-	addressResolver  discovery.AddressResolver
-	logger           *zap.Logger
+	selfNodeID        string
+	discoveryKind     internal.DiscoveryKind
+	discoveryHTTPHost string
+	refreshInterval   time.Duration
+
+	peers     *sync.RWMutex
+	peersList []model.PeerInfo
+
+	nodeToPeer    *sync.RWMutex
+	nodeToPeerMap map[string]model.PeerInfo
+
+	nodeToRaft    *sync.RWMutex
+	nodeToRaftMap map[string]uint64
+
+	raftToNode    *sync.RWMutex
+	raftToNodeMap map[uint64]string
+
+	logger *zap.Logger
 }
 
-// New creates a new ServiceDiscovery instance
-func NewServiceDiscovery(logger *zap.Logger, seed []string, quicPort uint16, selfNodeID string, addressResolver discovery.AddressResolver) (*ServiceDiscovery, error) {
-	found := slices.Contains(seed, selfNodeID)
-	if !found {
-		seed = append(seed, selfNodeID)
+// NewServiceDiscovery creates a new ServiceDiscovery instance
+func NewServiceDiscovery(
+	logger *zap.Logger,
+	seed []model.PeerInfo,
+	selfNodeID string,
+	discoveryKind internal.DiscoveryKind,
+	discoveryHTTPHost string,
+	refreshInterval time.Duration,
+) (*ServiceDiscovery, error) {
+	if discoveryKind == internal.DiscoveryKindHttp && discoveryHTTPHost == "" {
+		return nil, fmt.Errorf("http endpoint required for HTTP discovery")
 	}
 
-	logger.Sugar().Debugf("service discovery-  initial seed: %v", seed)
+	// logger.Sugar().Debugf("service discovery- initial seed: %v", seed)
 
-	// Build initial data structures
-	peersRaftIDs := make([]uint64, len(seed))
-	nodeToRaftMap := make(map[string]uint64)
-	raftToNodeMap := make(map[uint64]string)
-
-	for i, peer := range seed {
-		raftID := utils.StringToUint64(peer)
-		peersRaftIDs[i] = raftID
-		nodeToRaftMap[peer] = raftID
-		raftToNodeMap[raftID] = peer
+	sd := &ServiceDiscovery{
+		selfNodeID:        selfNodeID,
+		discoveryKind:     discoveryKind,
+		discoveryHTTPHost: discoveryHTTPHost,
+		refreshInterval:   refreshInterval,
+		peers:             &sync.RWMutex{},
+		nodeToPeer:        &sync.RWMutex{},
+		nodeToRaft:        &sync.RWMutex{},
+		raftToNode:        &sync.RWMutex{},
+		logger:            logger,
 	}
 
-	return &ServiceDiscovery{
-		selfNodeID:       selfNodeID,
-		peers:            &sync.RWMutex{},
-		peersList:        seed,
-		peersRaftIDs:     &sync.RWMutex{},
-		peersRaftIDsList: peersRaftIDs,
-		nodeToRaft:       &sync.RWMutex{},
-		nodeToRaftMap:    nodeToRaftMap,
-		raftToNode:       &sync.RWMutex{},
-		raftToNodeMap:    raftToNodeMap,
-		quicPort:         quicPort,
-		addressResolver:  addressResolver,
-		logger:           logger,
-	}, nil
+	sd.updateInternalState(seed) // initial build
+
+	return sd, nil
 }
 
-// GetNodeIDFromRaftID performs fast lookup from raft_id to node string
+// updateInternalState rebuilds all internal structures from model.PeerInfo list (shared logic)
+func (sd *ServiceDiscovery) updateInternalState(peers []model.PeerInfo) {
+	peersCopy := make([]model.PeerInfo, len(peers))
+	copy(peersCopy, peers)
+
+	nodeToPeerMap := make(map[string]model.PeerInfo, len(peers))
+	nodeToRaftMap := make(map[string]uint64, len(peers))
+	raftToNodeMap := make(map[uint64]string, len(peers))
+
+	for _, peer := range peers {
+		raftID := utils.StringToUint64(peer.NodeID)
+		nodeToPeerMap[peer.NodeID] = peer
+		nodeToRaftMap[peer.NodeID] = raftID
+		raftToNodeMap[raftID] = peer.NodeID
+	}
+
+	sd.peers.Lock()
+	sd.peersList = peersCopy
+	sd.peers.Unlock()
+
+	sd.nodeToPeer.Lock()
+	sd.nodeToPeerMap = nodeToPeerMap
+	sd.nodeToPeer.Unlock()
+
+	sd.nodeToRaft.Lock()
+	sd.nodeToRaftMap = nodeToRaftMap
+	sd.nodeToRaft.Unlock()
+
+	sd.raftToNode.Lock()
+	sd.raftToNodeMap = raftToNodeMap
+	sd.raftToNode.Unlock()
+}
+
+// refreshFromHTTP fetches latest peers (private)
+func (sd *ServiceDiscovery) refreshFromHTTP(ctx context.Context) ([]model.PeerInfo, error) {
+	if sd.discoveryHTTPHost == "" {
+		return nil, fmt.Errorf("no HTTP endpoint configured")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sd.discoveryHTTPHost, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("http request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("http status not OK: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Versioned first
+	var httpResp httpPeersResponse
+	if err := json.Unmarshal(body, &httpResp); err == nil && httpResp.Version > 0 {
+		if httpResp.Version != 1 {
+			return nil, fmt.Errorf("unsupported version: %d", httpResp.Version)
+		}
+		return httpResp.Peers, nil
+	}
+
+	// Fallback bare array
+	var peers []model.PeerInfo
+	if err := json.Unmarshal(body, &peers); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal peers: %w", err)
+	}
+	return peers, nil
+}
+
+// Run starts background polling (HTTP only; no-op for static)
+func (sd *ServiceDiscovery) Run(ctx context.Context) {
+	if sd.discoveryKind != internal.DiscoveryKindHttp {
+		return
+	}
+
+	ticker := time.NewTicker(sd.refreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sd.syncFromHTTP(ctx)
+		}
+	}
+}
+
+// syncFromHTTP refreshes and updates (internal)
+func (sd *ServiceDiscovery) syncFromHTTP(ctx context.Context) {
+	peers, err := sd.refreshFromHTTP(ctx)
+	if err != nil {
+		sd.logger.Error("failed to refresh peers from HTTP", zap.Error(err))
+		return
+	}
+	if len(peers) == 0 {
+		sd.logger.Warn("received empty peers list from HTTP")
+		return
+	}
+	sd.UpdatePeers(peers)
+}
+
+// Lookup returns model.PeerInfo for nodeID
+func (sd *ServiceDiscovery) Lookup(nodeID string) (model.PeerInfo, bool) {
+	sd.nodeToPeer.RLock()
+	defer sd.nodeToPeer.RUnlock()
+	peer, ok := sd.nodeToPeerMap[nodeID]
+	return peer, ok
+}
+
+// ListPeers returns copy of peers
+func (sd *ServiceDiscovery) ListPeers() []model.PeerInfo {
+	sd.peers.RLock()
+	defer sd.peers.RUnlock()
+	peers := make([]model.PeerInfo, len(sd.peersList))
+	copy(peers, sd.peersList)
+	return peers
+}
+
+// ListPeersRaftIDs (preserved/adapted)
+func (sd *ServiceDiscovery) ListPeersRaftIDs() []uint64 {
+	sd.nodeToRaft.RLock()
+	defer sd.nodeToRaft.RUnlock()
+	ids := make([]uint64, 0, len(sd.nodeToRaftMap))
+	for _, id := range sd.nodeToRaftMap {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// GetNodeIDFromRaftID (preserved)
 func (sd *ServiceDiscovery) GetNodeIDFromRaftID(raftID uint64) (string, bool) {
 	sd.raftToNode.RLock()
 	defer sd.raftToNode.RUnlock()
@@ -86,7 +236,7 @@ func (sd *ServiceDiscovery) GetNodeIDFromRaftID(raftID uint64) (string, bool) {
 	return node, ok
 }
 
-// GetRaftIDFromNode performs fast lookup from node string to raft_id
+// GetRaftIDFromNode (preserved)
 func (sd *ServiceDiscovery) GetRaftIDFromNode(node string) (uint64, bool) {
 	sd.nodeToRaft.RLock()
 	defer sd.nodeToRaft.RUnlock()
@@ -94,95 +244,21 @@ func (sd *ServiceDiscovery) GetRaftIDFromNode(node string) (uint64, bool) {
 	return raftID, ok
 }
 
-// ListPeersAddrServerName resolves and returns the list of peers and their IP:port strings
-func (sd *ServiceDiscovery) ListPeersAddrServerName() []PeerResolvedInfo {
-	sd.peers.RLock()
-	peers := make([]string, len(sd.peersList))
-	copy(peers, sd.peersList)
-	sd.peers.RUnlock()
-
-	resolved := make([]PeerResolvedInfo, 0, len(peers))
-
-	for _, peer := range peers {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		addr, err := sd.addressResolver.Resolve(ctx, peer)
-		cancel()
-		if err != nil {
-			continue
-		}
-		resolved = append(resolved, PeerResolvedInfo{
-			NodeId:     peer,
-			Addr:       addr,
-			ServerName: peer,
-		})
-	}
-
-	if len(resolved) == 0 {
-		sd.logger.Sugar().Warnf("%s: the resolved peers list is 0/%d", sd.selfNodeID, len(peers))
-	}
-
-	return resolved
+// UpdatePeers replaces entire list
+func (sd *ServiceDiscovery) UpdatePeers(updatePeers []model.PeerInfo) {
+	sd.updateInternalState(updatePeers)
 }
 
-// ListPeers returns list of peer strings
-func (sd *ServiceDiscovery) ListPeers() []string {
-	sd.peers.RLock()
-	defer sd.peers.RUnlock()
-	peers := make([]string, len(sd.peersList))
-	copy(peers, sd.peersList)
-	return peers
-}
-
-// ListPeersRaftIDs returns list of raft IDs
-func (sd *ServiceDiscovery) ListPeersRaftIDs() []uint64 {
-	sd.peersRaftIDs.RLock()
-	defer sd.peersRaftIDs.RUnlock()
-	ids := make([]uint64, len(sd.peersRaftIDsList))
-	copy(ids, sd.peersRaftIDsList)
-	return ids
-}
-
-// UpdatePeers replaces the entire peer list with new values and syncs all data structures
-func (sd *ServiceDiscovery) UpdatePeers(updatePeers []string) {
-	raftIDs := make([]uint64, len(updatePeers))
-	for i, peer := range updatePeers {
-		raftIDs[i] = utils.StringToUint64(peer)
-	}
-
-	// Build new maps
-	nodeToRaftMap := make(map[string]uint64)
-	raftToNodeMap := make(map[uint64]string)
-
-	for i, peer := range updatePeers {
-		raftID := raftIDs[i]
-		nodeToRaftMap[peer] = raftID
-		raftToNodeMap[raftID] = peer
-	}
-
-	// Update all data structures
-	sd.peers.Lock()
-	sd.peersList = updatePeers
-	sd.peers.Unlock()
-
-	sd.peersRaftIDs.Lock()
-	sd.peersRaftIDsList = raftIDs
-	sd.peersRaftIDs.Unlock()
-
-	sd.nodeToRaft.Lock()
-	sd.nodeToRaftMap = nodeToRaftMap
-	sd.nodeToRaft.Unlock()
-
-	sd.raftToNode.Lock()
-	sd.raftToNodeMap = raftToNodeMap
-	sd.raftToNode.Unlock()
-}
-
-// MergePeers adds new peers that aren't already present
-func (sd *ServiceDiscovery) MergePeers(newPeers []string) {
+// MergePeers adds missing peers
+func (sd *ServiceDiscovery) MergePeers(newPeers []model.PeerInfo) {
 	sd.peers.Lock()
 	changed := false
+	existing := make(map[string]bool, len(sd.peersList))
+	for _, p := range sd.peersList {
+		existing[p.NodeID] = true
+	}
 	for _, peer := range newPeers {
-		if !slices.Contains(sd.peersList, peer) {
+		if !existing[peer.NodeID] {
 			sd.peersList = append(sd.peersList, peer)
 			changed = true
 		}
@@ -190,82 +266,95 @@ func (sd *ServiceDiscovery) MergePeers(newPeers []string) {
 	sd.peers.Unlock()
 
 	if changed {
-		sd.rebuildMapsFromPeers()
+		sd.peers.RLock()
+		current := make([]model.PeerInfo, len(sd.peersList))
+		copy(current, sd.peersList)
+		sd.peers.RUnlock()
+		sd.updateInternalState(current)
 	}
 }
 
-// rebuildMapsFromPeers rebuilds lookup maps from current peer list
-func (sd *ServiceDiscovery) rebuildMapsFromPeers() {
-	sd.peers.RLock()
-	peers := make([]string, len(sd.peersList))
-	copy(peers, sd.peersList)
-	sd.peers.RUnlock()
-
-	raftIDs := make([]uint64, len(peers))
-	for i, peer := range peers {
-		raftIDs[i] = utils.StringToUint64(peer)
-	}
-
-	nodeToRaftMap := make(map[string]uint64)
-	raftToNodeMap := make(map[uint64]string)
-
-	for i, peer := range peers {
-		raftID := raftIDs[i]
-		nodeToRaftMap[peer] = raftID
-		raftToNodeMap[raftID] = peer
-	}
-
-	sd.peersRaftIDs.Lock()
-	sd.peersRaftIDsList = raftIDs
-	sd.peersRaftIDs.Unlock()
-
-	sd.nodeToRaft.Lock()
-	sd.nodeToRaftMap = nodeToRaftMap
-	sd.nodeToRaft.Unlock()
-
-	sd.raftToNode.Lock()
-	sd.raftToNodeMap = raftToNodeMap
-	sd.raftToNode.Unlock()
-}
-
-// ValidateConsistency checks that all data structures are consistent
+// ValidateConsistency updated for new structures
 func (sd *ServiceDiscovery) ValidateConsistency() bool {
 	sd.peers.RLock()
-	peers := make([]string, len(sd.peersList))
+	peers := make([]model.PeerInfo, len(sd.peersList))
 	copy(peers, sd.peersList)
 	sd.peers.RUnlock()
 
-	sd.peersRaftIDs.RLock()
-	peersRaftIDs := make([]uint64, len(sd.peersRaftIDsList))
-	copy(peersRaftIDs, sd.peersRaftIDsList)
-	sd.peersRaftIDs.RUnlock()
+	sd.nodeToPeer.RLock()
+	nodeToPeerMap := make(map[string]model.PeerInfo, len(sd.nodeToPeerMap))
+	for k, v := range sd.nodeToPeerMap {
+		nodeToPeerMap[k] = v
+	}
+	sd.nodeToPeer.RUnlock()
 
 	sd.nodeToRaft.RLock()
-	nodeToRaftMap := sd.nodeToRaftMap
+	nodeToRaftMap := make(map[string]uint64, len(sd.nodeToRaftMap))
+	for k, v := range sd.nodeToRaftMap {
+		nodeToRaftMap[k] = v
+	}
 	sd.nodeToRaft.RUnlock()
 
 	sd.raftToNode.RLock()
-	raftToNodeMap := sd.raftToNodeMap
+	raftToNodeMap := make(map[uint64]string, len(sd.raftToNodeMap))
+	for k, v := range sd.raftToNodeMap {
+		raftToNodeMap[k] = v
+	}
 	sd.raftToNode.RUnlock()
 
-	// Check vector lengths match
-	if len(peers) != len(peersRaftIDs) {
+	if len(peers) != len(nodeToPeerMap) || len(peers) != len(nodeToRaftMap) || len(peers) != len(raftToNodeMap) {
 		return false
 	}
 
-	// Check all peers are in nodeToRaft map
 	for _, peer := range peers {
-		if _, ok := nodeToRaftMap[peer]; !ok {
+		if p, ok := nodeToPeerMap[peer.NodeID]; !ok || p.NodeID != peer.NodeID {
+			return false
+		}
+		raftID := utils.StringToUint64(peer.NodeID)
+		if id, ok := nodeToRaftMap[peer.NodeID]; !ok || id != raftID {
+			return false
+		}
+		if n, ok := raftToNodeMap[raftID]; !ok || n != peer.NodeID {
 			return false
 		}
 	}
-
-	// Check all raft_ids are in raftToNode map
-	for _, raftID := range peersRaftIDs {
-		if _, ok := raftToNodeMap[raftID]; !ok {
-			return false
-		}
-	}
-
 	return true
+}
+
+// LoadDiscoveryFile loads and validates peers from YAML
+func LoadDiscoveryFile(pathStr string) ([]model.PeerInfo, error) {
+	data, err := os.ReadFile(pathStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read discovery file %s: %w", pathStr, err)
+	}
+
+	var config struct {
+		Nodes []model.PeerInfo `yaml:"nodes"`
+	}
+
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse discovery.yml: %w", err)
+	}
+
+	if len(config.Nodes) == 0 {
+		return nil, fmt.Errorf("no nodes defined in discovery file")
+	}
+
+	seen := make(map[string]bool)
+	validated := make([]model.PeerInfo, 0, len(config.Nodes))
+
+	for i, node := range config.Nodes {
+		if err := node.Validate(); err != nil {
+			return nil, fmt.Errorf("validation failed for node at index %d (%s): %w", i, node.NodeID, err)
+		}
+
+		if seen[node.NodeID] {
+			return nil, fmt.Errorf("duplicate node_id: %s", node.NodeID)
+		}
+		seen[node.NodeID] = true
+
+		validated = append(validated, node)
+	}
+
+	return validated, nil
 }

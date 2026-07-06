@@ -21,14 +21,6 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-// ========== Discovery ==========
-
-type PeerResolvedInfo struct {
-	NodeId     string `msgpack:"node_id"`
-	Addr       string `msgpack:"addr"`
-	ServerName string `msgpack:"serverName"`
-}
-
 // ========== Cluster Request ==========
 
 type ClusterRequestType uint8
@@ -37,7 +29,7 @@ const (
 	ReqConnectionHeartbeat ClusterRequestType = iota
 	ReqPeersListQuery
 	ReqUpdatePeersList
-	ReqSharedPeersList
+	ReqAddMissingPeers
 	ReqRaftMessage
 	ReqClusterInfo
 )
@@ -49,7 +41,7 @@ type ClusterRequest struct {
 	Heartbeat   *HeartbeatPayload
 	PeersList   *PeersListRespPayload
 	UpdatePeers *UpdatePeersPayload
-	SharedPeers *SharedPeersPayload
+	AddMissing  *AddMissingPayload
 	RaftMessage *RaftMessagePayload
 	ClusterInfo *ClusterInfoPayload
 }
@@ -59,11 +51,11 @@ type HeartbeatPayload struct {
 }
 
 type UpdatePeersPayload struct {
-	Peers []string `msgpack:"peers"`
+	Peers []model.PeerInfo `msgpack:"peers"`
 }
 
-type SharedPeersPayload struct {
-	Peers []string `msgpack:"peers"`
+type AddMissingPayload struct {
+	Peers []model.PeerInfo `msgpack:"peers"`
 }
 
 // RaftMessagePayload wraps the raw protobuf bytes
@@ -84,20 +76,17 @@ func (r ClusterRequest) MarshalMsgpack() ([]byte, error) {
 		}
 		payload = r.Heartbeat
 	case ReqPeersListQuery:
-		if r.PeersList == nil {
-			return nil, fmt.Errorf("peers_list payload missing")
-		}
-		payload = r.PeersList
+		payload = nil
 	case ReqUpdatePeersList:
 		if r.UpdatePeers == nil {
 			return nil, fmt.Errorf("update_peers payload missing")
 		}
 		payload = r.UpdatePeers
-	case ReqSharedPeersList:
-		if r.SharedPeers == nil {
-			return nil, fmt.Errorf("shared_peers payload missing")
+	case ReqAddMissingPeers:
+		if r.AddMissing == nil {
+			return nil, fmt.Errorf("add_missing payload missing")
 		}
-		payload = r.SharedPeers
+		payload = r.AddMissing
 	case ReqRaftMessage:
 		if r.RaftMessage == nil {
 			return nil, fmt.Errorf("raft_message payload missing")
@@ -136,19 +125,16 @@ func (r *ClusterRequest) UnmarshalMsgpack(data []byte) error {
 			return fmt.Errorf("unmarshal heartbeat: %w", err)
 		}
 	case ReqPeersListQuery:
-		r.PeersList = new(PeersListRespPayload)
-		if err := msgpack.Unmarshal(arr[1], r.PeersList); err != nil {
-			return fmt.Errorf("unmarshal peers_list: %w", err)
-		}
+		r.PeersList = nil
 	case ReqUpdatePeersList:
 		r.UpdatePeers = new(UpdatePeersPayload)
 		if err := msgpack.Unmarshal(arr[1], r.UpdatePeers); err != nil {
 			return fmt.Errorf("unmarshal update_peers: %w", err)
 		}
-	case ReqSharedPeersList:
-		r.SharedPeers = new(SharedPeersPayload)
-		if err := msgpack.Unmarshal(arr[1], r.SharedPeers); err != nil {
-			return fmt.Errorf("unmarshal shared_peers: %w", err)
+	case ReqAddMissingPeers:
+		r.AddMissing = new(AddMissingPayload)
+		if err := msgpack.Unmarshal(arr[1], r.AddMissing); err != nil {
+			return fmt.Errorf("unmarshal add_missing: %w", err)
 		}
 	case ReqRaftMessage:
 		r.RaftMessage = new(RaftMessagePayload)
@@ -175,8 +161,8 @@ func (t ClusterRequestType) String() string {
 		return "ReqPeersListQuery"
 	case ReqUpdatePeersList:
 		return "ReqUpdatePeersList"
-	case ReqSharedPeersList:
-		return "ReqSharedPeersList"
+	case ReqAddMissingPeers:
+		return "ReqAddMissingPeers"
 	case ReqRaftMessage:
 		return "ReqRaftMessage"
 	case ReqClusterInfo:
@@ -197,20 +183,16 @@ func (r ClusterRequest) String() string {
 			payloadStr = "nil"
 		}
 	case ReqPeersListQuery:
-		if r.PeersList != nil {
-			payloadStr = fmt.Sprintf("Peers=%v", r.PeersList.Peers)
-		} else {
-			payloadStr = "nil"
-		}
+		payloadStr = "nil"
 	case ReqUpdatePeersList:
 		if r.UpdatePeers != nil {
 			payloadStr = fmt.Sprintf("Peers=%v", r.UpdatePeers.Peers)
 		} else {
 			payloadStr = "nil"
 		}
-	case ReqSharedPeersList:
-		if r.SharedPeers != nil {
-			payloadStr = fmt.Sprintf("Peers=%v", r.SharedPeers.Peers)
+	case ReqAddMissingPeers:
+		if r.AddMissing != nil {
+			payloadStr = fmt.Sprintf("Peers=%v", r.AddMissing.Peers)
 		} else {
 			payloadStr = "nil"
 		}
@@ -271,7 +253,7 @@ type ErrorPayload struct {
 }
 
 type PeersListRespPayload struct {
-	Peers []string `msgpack:"peers"`
+	Peers []model.PeerInfo `msgpack:"peers"`
 }
 
 type ClusterInfoRespPayload struct {

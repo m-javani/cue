@@ -19,18 +19,20 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/m-javani/cue/internal"
+	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/utils"
-	"github.com/m-javani/cue/pkg/verifier"
 	"github.com/quic-go/quic-go"
 	"github.com/vmihailenco/msgpack/v5"
 	"go.uber.org/zap"
@@ -38,41 +40,37 @@ import (
 
 // Handshake represents the initial handshake message exchanged between peers
 type Handshake struct {
-	NodeID           string `msgpack:"node_id"`
-	TargetServerName string `msgpack:"target_serverName"`
-	// Extensible for future fields
+	NodeID string `msgpack:"node_id"`
 }
 
-// ClusterQUIC manages QUIC connections with peer nodes
+// ClusterQUIC manages QUIC connections
 type ClusterQUIC struct {
-	selfNodeID      string
-	certPath        string
-	keyPath         string
-	caCertPath      string
-	metrics         *internal.ClusterMetrics
+	selfNodeID string
+	quicPort   int
+	certPath   string
+	keyPath    string
+	caCertPath string
+	metrics    *internal.ClusterMetrics
+
 	transportConfig *quic.Config
-
-	serverConfig atomic.Pointer[tls.Config] // For accepting connections
-	clientConfig atomic.Pointer[tls.Config] // For dialing out (optional)
-
-	quicListener *quic.Listener
-	addr         *net.UDPAddr
+	serverConfig    atomic.Pointer[tls.Config]
+	clientConfig    atomic.Pointer[tls.Config]
+	quicListener    *quic.Listener
+	addr            *net.UDPAddr
 
 	// Connection management
-	outgoingConns         map[string]*quic.Conn // nodeID -> connection
+	outgoingConns         map[string]*quic.Conn
 	retiringOutgoingConns []retiringConn
-	incomingConns         map[string]*quic.Conn // nodeID -> connection
+	incomingConns         map[string]*quic.Conn
 	retiringIncomingConns []retiringConn
-	addressToNode         map[string]string // address string -> nodeID
-	nodeToServerName      map[string]string // nodeID -> serverName name
-	selfServerName        string
 
-	tlsVerifier verifier.TLSVerifier
-	tlsVersion  atomic.Value
+	nodeToServerName map[string]string
 
-	logger *zap.Logger
+	tlsVersion atomic.Value
+	logger     *zap.Logger
+	mu         sync.RWMutex
 
-	mu sync.RWMutex
+	discovery *ServiceDiscovery
 }
 
 type retiringConn struct {
@@ -80,123 +78,96 @@ type retiringConn struct {
 	conn      *quic.Conn
 }
 
-const maxRetiringConnSize = 100 // Adjust as needed
 const rotateTLSWindow = 600 * time.Second
 
 // createTransportConfig creates the QUIC transport configuration
 func createTransportConfig() *quic.Config {
-	// Heartbeat every 5s, idle timeout 30s — generous but not wasteful
 	heartbeatInterval := 5 * time.Second
 	idleTimeout := 30 * time.Second
-
 	return &quic.Config{
-		// Packet size: 1200 is standard and safe across networks
-		InitialPacketSize:       1200,
-		DisablePathMTUDiscovery: true,
-
-		// ---- Flow Control (THE CRITICAL FIX) ----
-		// Per-stream windows: 2MB initial, 8MB max
-		// Connection-wide: 8MB initial, 32MB max
-		// These numbers prevent stalls under burst load
-		InitialStreamReceiveWindow:     2_000_000,  // 2 MB
-		MaxStreamReceiveWindow:         8_000_000,  // 8 MB
-		InitialConnectionReceiveWindow: 8_000_000,  // 8 MB
-		MaxConnectionReceiveWindow:     32_000_000, // 32 MB
-
-		// ---- Connection Limits ----
-		// High TPS means many concurrent streams.
-		// If each request maps to a stream, set this to your expected concurrency.
-		MaxIncomingStreams:    10_000,
-		MaxIncomingUniStreams: 0, // Set only if you use unidirectional streams
-
-		// ---- Timeouts ----
-		MaxIdleTimeout:       idleTimeout,
-		HandshakeIdleTimeout: 10 * time.Second,
-		KeepAlivePeriod:      heartbeatInterval,
-		// Note: KeepAlivePeriod != 0 here because transport-level keepalive
-		// is more reliable than application-level for connection liveness.
-
-		// ---- 0-RTT ----
-		// Enable if you have replay-safe idempotent operations
-		Allow0RTT: false,
-
-		// ---- Datagrams ----
-		// Only enable if you actually use them
-		EnableDatagrams: false,
+		InitialPacketSize:              1200,
+		DisablePathMTUDiscovery:        true,
+		InitialStreamReceiveWindow:     2_000_000,
+		MaxStreamReceiveWindow:         8_000_000,
+		InitialConnectionReceiveWindow: 8_000_000,
+		MaxConnectionReceiveWindow:     32_000_000,
+		MaxIncomingStreams:             10_000,
+		MaxIncomingUniStreams:          0,
+		MaxIdleTimeout:                 idleTimeout,
+		HandshakeIdleTimeout:           10 * time.Second,
+		KeepAlivePeriod:                heartbeatInterval,
+		Allow0RTT:                      false,
+		EnableDatagrams:                false,
 	}
 }
 
 // NewClusterQUIC creates a new QUIC server instance
 func NewClusterQUIC(
 	selfNodeID string,
+	quicPort int,
 	certPath string,
 	keyPath string,
 	caCertPath string,
 	listenAddr string,
 	logger *zap.Logger,
-	tlsVerifier verifier.TLSVerifier,
+	discovery *ServiceDiscovery,
 ) (*ClusterQUIC, error) {
-	// Parse listen address
 	addr, err := net.ResolveUDPAddr("udp", listenAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve listen address: %w", err)
 	}
 
-	// Get initial TLS version
 	tlsVersionStr, err := utils.GetTLSVersion(certPath, keyPath, caCertPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get TLS version: %w", err)
 	}
-	tlsVersion := atomic.Value{}
-	tlsVersion.Store(tlsVersionStr)
 
-	// Load initial server TLS config
 	serverTlsConfig, err := loadServerTLSConfig(certPath, keyPath, caCertPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load server TLS config: %w", err)
 	}
 
-	// Load initial client TLS config
 	clientTLSConfig, err := loadClientTLSConfig(certPath, keyPath, caCertPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load client TLS config: %w", err)
 	}
 
-	// Create transport configuration
 	transportConfig := createTransportConfig()
 
-	// Create UDP connection
 	udpConn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on UDP: %w", err)
 	}
 
-	// Create server struct first (without listener)
-	server := &ClusterQUIC{
-		selfNodeID:       selfNodeID,
-		certPath:         certPath,
-		keyPath:          keyPath,
-		caCertPath:       caCertPath,
-		metrics:          internal.GetClusterMetrics(),
-		transportConfig:  transportConfig,
-		addr:             addr,
-		outgoingConns:    make(map[string]*quic.Conn),
-		incomingConns:    make(map[string]*quic.Conn),
-		addressToNode:    make(map[string]string),
-		nodeToServerName: make(map[string]string),
-		tlsVerifier:      tlsVerifier,
-		tlsVersion:       tlsVersion,
-		logger:           logger,
+	s := &ClusterQUIC{
+		selfNodeID:            selfNodeID,
+		certPath:              certPath,
+		keyPath:               keyPath,
+		caCertPath:            caCertPath,
+		metrics:               internal.GetClusterMetrics(),
+		transportConfig:       transportConfig,
+		addr:                  addr,
+		outgoingConns:         make(map[string]*quic.Conn),
+		incomingConns:         make(map[string]*quic.Conn),
+		nodeToServerName:      make(map[string]string),
+		tlsVersion:            atomic.Value{},
+		logger:                logger,
+		discovery:             discovery,
+		quicPort:              quicPort,
+		serverConfig:          atomic.Pointer[tls.Config]{},
+		clientConfig:          atomic.Pointer[tls.Config]{},
+		quicListener:          &quic.Listener{},
+		retiringOutgoingConns: []retiringConn{},
+		retiringIncomingConns: []retiringConn{},
+		mu:                    sync.RWMutex{},
 	}
+	s.tlsVersion.Store(tlsVersionStr)
+	s.serverConfig.Store(serverTlsConfig)
+	s.clientConfig.Store(clientTLSConfig)
 
-	// Store initial configs atomically BEFORE creating listener
-	server.serverConfig.Store(serverTlsConfig)
-	server.clientConfig.Store(clientTLSConfig)
-
-	// Now create listener config with GetConfigForClient that references server
 	listenerConfig := &tls.Config{
 		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
-			cfg := server.serverConfig.Load()
+			cfg := s.serverConfig.Load()
 			if cfg == nil {
 				return nil, fmt.Errorf("no server TLS config available")
 			}
@@ -204,47 +175,37 @@ func NewClusterQUIC(
 		},
 	}
 
-	// Create QUIC listener - created ONCE, never recreated!
 	quicListener, err := quic.Listen(udpConn, listenerConfig, transportConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create QUIC listener: %w", err)
 	}
+	s.quicListener = quicListener
 
-	// Set the listener on the server
-	server.quicListener = quicListener
-
-	return server, nil
+	return s, nil
 }
 
 // loadServerTLSConfig loads TLS config for the server side (accepting connections)
 func loadServerTLSConfig(certPath, keyPath, caCertPath string) (*tls.Config, error) {
-	// Load server certificate
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load keypair: %w", err)
 	}
-
-	// Load CA certificate (for verifying peers)
 	caCert, err := os.ReadFile(caCertPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read CA cert: %w", err)
 	}
-
 	caCertPool := x509.NewCertPool()
 	if !caCertPool.AppendCertsFromPEM(caCert) {
 		return nil, fmt.Errorf("failed to parse CA certificate")
 	}
 
-	tlsConfig := &tls.Config{
+	return &tls.Config{
 		Certificates:           []tls.Certificate{cert},
 		MinVersion:             tls.VersionTLS13,
 		ClientCAs:              caCertPool,
 		ClientAuth:             tls.RequireAndVerifyClientCert,
 		SessionTicketsDisabled: true,
-		InsecureSkipVerify:     false,
-	}
-
-	return tlsConfig, nil
+	}, nil
 }
 
 // loadClientTLSConfig loads TLS config for the client side (dialing out)
@@ -253,61 +214,81 @@ func loadClientTLSConfig(certPath, keyPath, caCertPath string) (*tls.Config, err
 	if err != nil {
 		return nil, fmt.Errorf("failed to load keypair: %w", err)
 	}
-
-	// Load CA for verifying server certificates
 	caCert, err := os.ReadFile(caCertPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read CA certificate: %w", err)
 	}
-
 	caCertPool := x509.NewCertPool()
 	if !caCertPool.AppendCertsFromPEM(caCert) {
 		return nil, fmt.Errorf("failed to parse CA certificate")
 	}
 
-	tlsConfig := &tls.Config{
+	return &tls.Config{
 		Certificates:           []tls.Certificate{cert},
 		RootCAs:                caCertPool,
 		MinVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: true,
-	}
-
-	return tlsConfig, nil
+		InsecureSkipVerify:     true,
+	}, nil
 }
 
 func (s *ClusterQUIC) ReloadTLS() error {
-	// Validate files exist
 	if err := utils.ValidateFilesExit([]string{s.certPath, s.keyPath, s.caCertPath}); err != nil {
 		return fmt.Errorf("cert validation failed: %w", err)
 	}
 
-	// Load new server config
 	newServerCfg, err := loadServerTLSConfig(s.certPath, s.keyPath, s.caCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to load server TLS config: %w", err)
 	}
-
-	// Load new client config
 	newClientCfg, err := loadClientTLSConfig(s.certPath, s.keyPath, s.caCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to load client TLS config: %w", err)
 	}
 
-	// Atomically swap configs
 	s.serverConfig.Store(newServerCfg)
 	s.clientConfig.Store(newClientCfg)
 
-	// UPDATE THE TLS VERSION
-	newVersion, err := utils.GetTLSVersion(s.certPath, s.keyPath, s.caCertPath)
-	if err != nil {
-		// Log but don't fail - certs loaded successfully, version is secondary
-		s.logger.Warn("failed to get TLS version after reload", zap.Error(err))
-	} else {
+	if newVersion, err := utils.GetTLSVersion(s.certPath, s.keyPath, s.caCertPath); err == nil {
 		s.tlsVersion.Store(newVersion)
+	} else {
+		s.logger.Warn("failed to get TLS version after reload", zap.Error(err))
 	}
-
 	s.logger.Info("TLS certificates reloaded successfully")
 	return nil
+}
+
+func (s *ClusterQUIC) VerifyTLSIdentity(cert *x509.Certificate, expected model.TLSIdentity) error {
+	switch expected.Kind {
+	case model.IdentityDNS:
+		if slices.Contains(cert.DNSNames, expected.Value) {
+			return nil
+		}
+		return fmt.Errorf("certificate does not contain expected DNS SAN: %s. cert.DNSNames: %+v", expected.Value, cert.DNSNames)
+
+	case model.IdentityIP:
+		expectedIP := net.ParseIP(expected.Value)
+		if expectedIP == nil {
+			return fmt.Errorf("invalid IP in expected identity: %s", expected.Value)
+		}
+		for _, ip := range cert.IPAddresses {
+			if ip.Equal(expectedIP) {
+				return nil
+			}
+		}
+		return fmt.Errorf("certificate does not contain expected IP SAN: %s", expected.Value)
+
+	case model.IdentitySPIFFE:
+		for _, uri := range cert.URIs {
+			if uri.String() == expected.Value {
+				return nil
+			}
+		}
+		return fmt.Errorf("certificate does not contain expected SPIFFE URI: %s", expected.Value)
+
+	default:
+		return fmt.Errorf("unsupported identity kind: %d", expected.Kind)
+	}
 }
 
 // AcceptConnection waits for and accepts a new QUIC connection, performs handshake, returns nodeID and connection
@@ -318,7 +299,6 @@ func (s *ClusterQUIC) AcceptConnection(ctx context.Context) (string, *quic.Conn,
 		return "", nil, err
 	}
 
-	// Get peer certificate from TLS connection state
 	connState := conn.ConnectionState()
 	if len(connState.TLS.PeerCertificates) == 0 {
 		_ = conn.CloseWithError(0, "no client certificate")
@@ -332,31 +312,18 @@ func (s *ClusterQUIC) AcceptConnection(ctx context.Context) (string, *quic.Conn,
 		return "", nil, err
 	}
 
-	// Authorize: verify the certificate matches the claimed nodeID
-	if s.tlsVerifier != nil {
-		cert := connState.TLS.PeerCertificates[0]
-		if err := s.tlsVerifier.VerifyPeer(cert, verifier.Identity{NodeID: nodeID}); err != nil {
-			_ = conn.CloseWithError(0, "authorization failed")
-			s.metrics.ConnectionRejected()
-			return "", nil, fmt.Errorf("peer authorization failed: %w", err)
-		}
-	}
-
-	// Store incoming connection
 	s.mu.Lock()
-	oldConn, exists := s.incomingConns[nodeID]
-	s.incomingConns[nodeID] = conn
-	if exists && oldConn != nil {
+	if oldConn, exists := s.incomingConns[nodeID]; exists && oldConn != nil {
 		go func() {
 			time.Sleep(rotateTLSWindow)
 			_ = oldConn.CloseWithError(0, "replaced")
 			s.metrics.ConnectionDropped()
 		}()
 	}
+	s.incomingConns[nodeID] = conn
 	s.mu.Unlock()
 
 	s.metrics.ConnectionAccepted()
-
 	return nodeID, conn, nil
 }
 
@@ -372,22 +339,18 @@ func (s *ClusterQUIC) performHandshake(conn *quic.Conn) (string, error) {
 	defer stream.Close()
 
 	var handshake Handshake
-	decoder := msgpack.NewDecoder(stream)
-	if err := decoder.Decode(&handshake); err != nil {
+	if err := msgpack.NewDecoder(stream).Decode(&handshake); err != nil {
 		s.metrics.ReceiveError()
 		return "", err
 	}
-
-	s.selfServerName = handshake.TargetServerName
 
 	if handshake.NodeID == s.selfNodeID {
 		return "", fmt.Errorf("connect to self not allowed")
 	}
 
 	// Send response
-	response := Handshake{NodeID: s.selfNodeID, TargetServerName: handshake.TargetServerName}
-	encoder := msgpack.NewEncoder(stream)
-	if err := encoder.Encode(response); err != nil {
+	response := Handshake{NodeID: s.selfNodeID}
+	if err := msgpack.NewEncoder(stream).Encode(response); err != nil {
 		s.metrics.ReceiveError()
 		return "", err
 	}
@@ -503,44 +466,53 @@ func (s *ClusterQUIC) WriteResponse(stream *quic.Stream, resp *ClusterResponse) 
 }
 
 // Connect establishes a connection to a peer
-func (s *ClusterQUIC) Connect(ctx context.Context, port uint64, remoteAddr string, targetServerName string, targetNodeID string, handshake Handshake) error {
+func (s *ClusterQUIC) Connect(ctx context.Context, nodeID string) error {
+	if nodeID == s.selfNodeID {
+		return errors.New("self connection not allowed")
+	}
+	peerInfo, ok := s.discovery.Lookup(nodeID)
+	if !ok {
+		return fmt.Errorf("peer not found in discovery: %s", nodeID)
+	}
+
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// Load current client config
 	baseConfig := s.clientConfig.Load()
 	if baseConfig == nil {
 		return fmt.Errorf("no client TLS config available")
 	}
-	// Clone and customize for this connection
+
 	tlsConfig := baseConfig.Clone()
-	tlsConfig.ServerName = targetServerName
 
-	// Override VerifyPeerCertificate to capture the target node ID
-	if s.tlsVerifier != nil {
-		// Disable Go's built-in verification so our custom verifier runs
-		tlsConfig.InsecureSkipVerify = true
+	// Build remote address (adjust quicPort from config if needed)
+	// For now, assume fixed port or extend PeerInfo if necessary
+	port := s.quicPort
+	if peerInfo.Port != 0 {
+		port = int(peerInfo.Port)
+	}
+	remoteAddr := net.JoinHostPort(peerInfo.IP, strconv.Itoa(port))
 
-		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("no peer certificate")
-			}
-
-			cert := cs.PeerCertificates[0]
-
-			// verify chain
-			if _, err := cert.Verify(x509.VerifyOptions{
-				Roots: s.clientConfig.Load().RootCAs,
-			}); err != nil {
-				return err
-			}
-
-			// identity verification
-			return s.tlsVerifier.VerifyPeer(cert, verifier.Identity{
-				NodeID:     targetNodeID,
-				ServerName: targetServerName,
-			})
+	tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) == 0 {
+			return fmt.Errorf("no peer certificate")
 		}
+		leaf := cs.PeerCertificates[0]
+
+		intermediates := x509.NewCertPool()
+		for _, cert := range cs.PeerCertificates[1:] {
+			intermediates.AddCert(cert)
+		}
+
+		// 1. Full chain validation
+		if _, err := leaf.Verify(x509.VerifyOptions{
+			Roots:         baseConfig.RootCAs,
+			Intermediates: intermediates,
+		}); err != nil {
+			return fmt.Errorf("certificate chain verification failed: %w", err)
+		}
+
+		return nil
 	}
 
 	conn, err := quic.DialAddr(connectCtx, remoteAddr, tlsConfig, s.transportConfig)
@@ -549,88 +521,40 @@ func (s *ClusterQUIC) Connect(ctx context.Context, port uint64, remoteAddr strin
 		return fmt.Errorf("failed to dial QUIC: %w", err)
 	}
 
+	cs := conn.ConnectionState()
+	leaf := cs.TLS.PeerCertificates[0]
+	if err := s.VerifyTLSIdentity(leaf, peerInfo.Identity); err != nil {
+		return err
+	}
+
+	// Perform handshake
 	stream, err := conn.OpenStreamSync(connectCtx)
 	if err != nil {
-		s.metrics.ConnectionError()
-		_ = conn.CloseWithError(0, "failed to open stream")
-		return fmt.Errorf("failed to open stream: %w", err)
+		_ = conn.CloseWithError(0, "stream failed")
+		return err
+	}
+	defer stream.Close()
+
+	if err := msgpack.NewEncoder(stream).Encode(Handshake{NodeID: s.selfNodeID}); err != nil {
+		_ = conn.CloseWithError(0, "handshake failed")
+		return err
 	}
 
-	// Send our handshake
-	encoder := msgpack.NewEncoder(stream)
-	if err := encoder.Encode(handshake); err != nil {
-		stream.CancelRead(0)
-		stream.CancelWrite(0)
-		_ = conn.CloseWithError(0, "handshake encode failed")
-		s.metrics.ReceiveError()
-		return fmt.Errorf("failed to encode handshake: %w", err)
+	var peerResp Handshake
+	if err := msgpack.NewDecoder(stream).Decode(&peerResp); err != nil {
+		_ = conn.CloseWithError(0, "handshake failed")
+		return err
 	}
 
-	// Read the peer's handshake response
-	decoder := msgpack.NewDecoder(stream)
-	var peerHandshake Handshake
-	if err := decoder.Decode(&peerHandshake); err != nil {
-		stream.CancelRead(0)
-		stream.CancelWrite(0)
-		_ = conn.CloseWithError(0, "failed to read peer handshake")
-		s.metrics.ConnectionRejected()
-		return fmt.Errorf("failed to decode peer handshake: %w", err)
-	}
-
-	// Validate peer handshake
-	if peerHandshake.NodeID == s.selfNodeID {
-		stream.CancelRead(0)
-		stream.CancelWrite(0)
-		_ = conn.CloseWithError(0, "connect to self rejected")
-		s.metrics.ConnectionRejected()
-		return fmt.Errorf("connect to self rejected node_id: %s", peerHandshake.NodeID)
-	}
-
-	// Store the connection using peer's actual NodeID from their handshake
 	s.mu.Lock()
-	oldConn, exists := s.outgoingConns[peerHandshake.NodeID]
-	s.outgoingConns[peerHandshake.NodeID] = conn
-	s.addressToNode[remoteAddr] = peerHandshake.NodeID
-	s.nodeToServerName[peerHandshake.NodeID] = peerHandshake.TargetServerName
-
-	if exists && oldConn != nil {
-		if len(s.retiringOutgoingConns) < maxRetiringConnSize {
-			s.retiringOutgoingConns = append(s.retiringOutgoingConns, retiringConn{
-				timestamp: time.Now(),
-				conn:      oldConn,
-			})
-		} else {
-			_ = oldConn.CloseWithError(0, "retiring connection limit reached")
-			s.metrics.ConnectionDropped()
-		}
+	if old, exists := s.outgoingConns[peerResp.NodeID]; exists && old != nil {
+		s.retiringOutgoingConns = append(s.retiringOutgoingConns, retiringConn{time.Now(), old})
 	}
+	s.outgoingConns[peerResp.NodeID] = conn
 	s.mu.Unlock()
 
 	s.metrics.ConnectionOpened()
-
-	s.logger.Info("Connected to node",
-		zap.String("node", s.selfNodeID),
-		zap.String("peer_node_id", peerHandshake.NodeID),
-		zap.String("peer_serverName", peerHandshake.TargetServerName),
-		zap.String("addr", targetServerName))
-
 	return nil
-}
-
-// Helper method for tests to access nodeToServerName
-func (s *ClusterQUIC) GetServerNameByNodeID(nodeID string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	serverName, exists := s.nodeToServerName[nodeID]
-	return serverName, exists
-}
-
-// GetNodeIDByAddress returns node ID for a given address
-func (s *ClusterQUIC) GetNodeIDByAddress(addr string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	nodeID, exists := s.addressToNode[addr]
-	return nodeID, exists
 }
 
 // GetRetiringOutgoingConnections returns all retiring outgoing connections
@@ -831,46 +755,24 @@ func (s *ClusterQUIC) CleanupRetiringIncoming() {
 	s.retiringIncomingConns = newIncoming
 }
 
-// SyncConnections ensures connections to all provided peers
-func (s *ClusterQUIC) SyncConnections(nodeInfos []PeerResolvedInfo) error {
+// SyncConnections ensures connections to all peers in the current discovery view
+func (s *ClusterQUIC) SyncConnections() error {
+	peers := s.discovery.ListPeers()
+
 	s.mu.Lock()
-
-	// Validate and filter peers
-	nodes := make([]PeerResolvedInfo, 0, len(nodeInfos))
-	registryAddrSet := make(map[string]bool)
-
-	for _, pair := range nodeInfos {
-		// Skip self
-		if s.selfServerName != "" && pair.ServerName == s.selfServerName {
-			continue
-		}
-		// Validate address
-		if _, err := net.ResolveUDPAddr("udp", pair.Addr); err == nil {
-			nodes = append(nodes, pair)
-			registryAddrSet[pair.Addr] = true
-		} else {
-			s.logger.Sugar().Warnf("%s failed to resolve: %s, %v", s.selfNodeID, pair.Addr, err)
+	// Build desired set
+	desired := make(map[string]model.PeerInfo, len(peers))
+	for _, p := range peers {
+		if p.NodeID != s.selfNodeID {
+			desired[p.NodeID] = p
 		}
 	}
 
-	// Build desired set by nodeID
-	desiredNodes := make(map[string]PeerResolvedInfo)
-	for _, node := range nodes {
-		desiredNodes[node.NodeId] = node
-	}
-
-	// Remove undesired or dead outgoing connections
+	// Remove connections that are no longer desired or dead
 	for nodeID, conn := range s.outgoingConns {
-		if _, stillDesired := desiredNodes[nodeID]; !stillDesired {
+		if _, stillDesired := desired[nodeID]; !stillDesired || conn.Context().Err() != nil {
 			delete(s.outgoingConns, nodeID)
 			delete(s.nodeToServerName, nodeID)
-			delete(s.addressToNode, s.addressToNode[nodeID])
-			continue
-		}
-		if conn.Context().Err() != nil {
-			delete(s.outgoingConns, nodeID)
-			delete(s.nodeToServerName, nodeID)
-			delete(s.addressToNode, s.addressToNode[nodeID])
 		}
 	}
 
@@ -881,55 +783,30 @@ func (s *ClusterQUIC) SyncConnections(nodeInfos []PeerResolvedInfo) error {
 		}
 	}
 
-	// Only connect to nodes we don't have
-	nodesToConnect := []PeerResolvedInfo{}
-	for nodeID, info := range desiredNodes {
-		if _, hasConn := s.outgoingConns[nodeID]; !hasConn {
+	// Collect nodes that need new outgoing connections
+	nodesToConnect := make([]model.PeerInfo, 0, len(desired))
+	for nodeID, info := range desired {
+		if _, has := s.outgoingConns[nodeID]; !has {
 			nodesToConnect = append(nodesToConnect, info)
 		}
 	}
-
 	s.mu.Unlock()
 
 	// Connect in parallel
 	var wg sync.WaitGroup
 	for _, info := range nodesToConnect {
-		if info.NodeId == s.selfNodeID {
-			continue
-		}
 		wg.Add(1)
-		go func(pi PeerResolvedInfo) {
+		go func(pi model.PeerInfo) {
 			defer wg.Done()
-
-			_, portStr, err := net.SplitHostPort(pi.Addr)
-			if err != nil {
-				s.logger.Error("invalid address", zap.String("addr", pi.Addr), zap.Error(err))
-				return
-			}
-			port, err := strconv.Atoi(portStr)
-			if err != nil {
-				s.logger.Error("invalid address", zap.String("addr", pi.Addr), zap.Error(err))
-				return
-			}
-
-			handshake := Handshake{
-				NodeID:           s.selfNodeID,
-				TargetServerName: pi.ServerName,
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			err = s.Connect(ctx, uint64(port), pi.Addr, pi.ServerName, pi.NodeId, handshake)
-			if err != nil {
-				s.logger.Warn("couldnt connect",
-					zap.String("node", s.selfNodeID),
-					zap.String("target", pi.NodeId),
+			if err := s.Connect(context.Background(), pi.NodeID); err != nil {
+				s.logger.Warn("failed to connect to peer",
+					zap.String("self", s.selfNodeID),
+					zap.String("target", pi.NodeID),
 					zap.Error(err))
 			} else {
-				s.logger.Info("connected",
-					zap.String("node", s.selfNodeID),
-					zap.String("target", pi.NodeId))
+				s.logger.Info("successfully connected",
+					zap.String("self", s.selfNodeID),
+					zap.String("target", pi.NodeID))
 			}
 		}(info)
 	}
@@ -938,54 +815,25 @@ func (s *ClusterQUIC) SyncConnections(nodeInfos []PeerResolvedInfo) error {
 	return nil
 }
 
-// ReconnectToPeers attempts to connect to a list of peers and returns successful ones
-func (s *ClusterQUIC) ReconnectToPeers(nodeInfos []PeerResolvedInfo) ([]string, error) {
-	var remainingPeers []PeerResolvedInfo
-	for _, pair := range nodeInfos {
-		if pair.NodeId == s.selfNodeID {
-			continue
-		}
-		if _, err := net.ResolveUDPAddr("udp", pair.Addr); err == nil {
-			remainingPeers = append(remainingPeers, PeerResolvedInfo{
-				NodeId:     pair.NodeId,
-				Addr:       pair.Addr,
-				ServerName: pair.ServerName,
-			})
-		}
-	}
+// ReconnectToPeers attempts to reconnect to all known peers and returns successfully reconnected addresses
+func (s *ClusterQUIC) ReconnectToPeers() ([]string, error) {
+	peers := s.discovery.ListPeers()
 
 	var wg sync.WaitGroup
 	results := make(chan struct {
-		addr string
-		err  error
-	}, len(remainingPeers))
+		nodeID string
+		err    error
+	}, len(peers))
 
-	for _, peer := range remainingPeers {
+	for _, peer := range peers {
 		wg.Add(1)
-		go func(p PeerResolvedInfo) {
+		go func(p model.PeerInfo) {
 			defer wg.Done()
-
-			handshake := Handshake{
-				NodeID:           s.selfNodeID,
-				TargetServerName: p.ServerName,
-			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-
-			_, portStr, err := net.SplitHostPort(p.Addr)
-			if err != nil {
-				s.logger.Error("missing port in connection address", zap.Error(err))
-			}
-			port, err := strconv.Atoi(portStr)
-			if err != nil {
-				s.logger.Error("missing port in connection address", zap.Error(err))
-			}
-			err = s.Connect(ctx, uint64(port), p.Addr, p.ServerName, p.NodeId, handshake)
+			err := s.Connect(context.Background(), p.NodeID)
 			results <- struct {
-				addr string
-				err  error
-			}{p.Addr, err}
+				nodeID string
+				err    error
+			}{p.NodeID, err}
 		}(peer)
 	}
 
@@ -994,14 +842,17 @@ func (s *ClusterQUIC) ReconnectToPeers(nodeInfos []PeerResolvedInfo) ([]string, 
 		close(results)
 	}()
 
-	var successfulPeers []string
+	var successful []string
 	for res := range results {
 		if res.err == nil {
-			successfulPeers = append(successfulPeers, res.addr)
+			successful = append(successful, res.nodeID)
 		}
+		// else {
+		// 	s.logger.Debug("reconnect failed", zap.String("target", res.nodeID), zap.Error(res.err))
+		// }
 	}
 
-	return successfulPeers, nil
+	return successful, nil
 }
 
 // Close gracefully shuts down the server and all connections
@@ -1040,13 +891,6 @@ func (s *ClusterQUIC) Close() error {
 	}
 
 	return nil
-}
-
-// GetNodeID returns the node ID for a given connection (from handshake)
-func (s *ClusterQUIC) GetNodeID(conn *quic.Conn) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.addressToNode[conn.RemoteAddr().String()]
 }
 
 func (s *ClusterQUIC) GetTLSVersion() string {

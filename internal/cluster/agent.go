@@ -29,7 +29,6 @@ import (
 	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/state"
 	"github.com/m-javani/cue/internal/utils"
-	"github.com/m-javani/cue/pkg/discovery"
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
 )
@@ -104,6 +103,9 @@ type ClusterAgent struct {
 	members *model.Members
 
 	logger *zap.Logger
+
+	peerSyncOutgoingCoolDown atomic.Int64
+	peerUpdateNodesCoolDown  atomic.Int64
 }
 
 // New creates a new ClusterAgent
@@ -120,7 +122,7 @@ func NewClusterAgent(
 	currentTerm *atomic.Uint64,
 	members *model.Members,
 	leaderID *atomic.Value,
-	addressResolver discovery.AddressResolver,
+	discovery *ServiceDiscovery,
 	logger *zap.Logger) (*ClusterAgent, error) {
 
 	if handler == nil {
@@ -132,56 +134,51 @@ func NewClusterAgent(
 	}
 
 	agent := &ClusterAgent{
-		nodeID:               nodeID,
-		raftNodeID:           utils.StringToUint64(nodeID),
-		initialVoters:        cfg.InitialVoters,
-		dataDir:              dataDir,
-		snapshotIntervalSec:  cfg.SnapshotIntervalSec,
-		snapshotTriggerCount: cfg.SnapshotTriggerCount,
-		walFlushThreshold:    cfg.WALFlushThreshold,
-		certPath:             cfg.CertPath,
-		keyPath:              cfg.KeyPath,
-		caCertPath:           cfg.CACertPath,
-		ctx:                  ctx,
-		cancel:               cancel,
-		commandCh:            commandCh,
-		handler:              handler,
-		dlqManager:           dlqManager,
-		metrics:              internal.GetClusterMetrics(),
-		logger:               logger,
-		quicServer:           quicServer,
-		status:               status,
-		currentTerm:          currentTerm,
-		pendingProposals:     make(map[uint64]model.RespInfo),
-		proposalID:           atomic.Uint64{},
-		leaderID:             leaderID,
-		muPndPr:              sync.RWMutex{},
-		proposeCh:            make(chan ProposeRequest, 1024),
-		stepCh:               make(chan raftpb.Message, 1024),
-		commitCh:             make(chan CommittedEntry, 1024),
-		outgoingCh:           make(chan raftpb.Message, 1024),
-		ctrlCh:               make(chan ControlCmd, 1024),
-		notifyCh:             make(chan NotifyEvent, 1024),
-		isLeader:             atomic.Bool{},
-		isVoter:              atomic.Int32{},
-		discovery:            &ServiceDiscovery{},
-		lastAppliedIndex:     atomic.Uint64{},
-		snapshotIndex:        atomic.Uint64{},
-		lastSnapshotSec:      atomic.Int64{},
-		deadJobs:             map[string]bool{},
-		lastSnapshotTrySec:   atomic.Int64{},
-		lastCertFingerprint:  "",
-		members:              members,
-		raftTickMs:           cfg.RaftTickMs,
-		raftHeartbeatTick:    cfg.RaftHeartbeatTick,
-		raftElectionTick:     cfg.RaftElectionTick,
-	}
-
-	// Initialize discovery
-	agent.discovery, err = NewServiceDiscovery(logger, cfg.Peers, cfg.QUICPort, nodeID, addressResolver)
-	if err != nil {
-		cancel()
-		return nil, err
+		nodeID:                   nodeID,
+		raftNodeID:               utils.StringToUint64(nodeID),
+		initialVoters:            cfg.InitialVoters,
+		dataDir:                  dataDir,
+		snapshotIntervalSec:      cfg.SnapshotIntervalSec,
+		snapshotTriggerCount:     cfg.SnapshotTriggerCount,
+		walFlushThreshold:        cfg.WALFlushThreshold,
+		certPath:                 cfg.CertPath,
+		keyPath:                  cfg.KeyPath,
+		caCertPath:               cfg.CACertPath,
+		ctx:                      ctx,
+		cancel:                   cancel,
+		commandCh:                commandCh,
+		handler:                  handler,
+		dlqManager:               dlqManager,
+		metrics:                  internal.GetClusterMetrics(),
+		logger:                   logger,
+		quicServer:               quicServer,
+		status:                   status,
+		currentTerm:              currentTerm,
+		pendingProposals:         make(map[uint64]model.RespInfo),
+		proposalID:               atomic.Uint64{},
+		leaderID:                 leaderID,
+		muPndPr:                  sync.RWMutex{},
+		proposeCh:                make(chan ProposeRequest, 1024),
+		stepCh:                   make(chan raftpb.Message, 1024),
+		commitCh:                 make(chan CommittedEntry, 1024),
+		outgoingCh:               make(chan raftpb.Message, 1024),
+		ctrlCh:                   make(chan ControlCmd, 1024),
+		notifyCh:                 make(chan NotifyEvent, 1024),
+		isLeader:                 atomic.Bool{},
+		isVoter:                  atomic.Int32{},
+		discovery:                discovery,
+		lastAppliedIndex:         atomic.Uint64{},
+		snapshotIndex:            atomic.Uint64{},
+		lastSnapshotSec:          atomic.Int64{},
+		deadJobs:                 map[string]bool{},
+		lastSnapshotTrySec:       atomic.Int64{},
+		lastCertFingerprint:      "",
+		members:                  members,
+		raftTickMs:               cfg.RaftTickMs,
+		raftHeartbeatTick:        cfg.RaftHeartbeatTick,
+		raftElectionTick:         cfg.RaftElectionTick,
+		peerSyncOutgoingCoolDown: atomic.Int64{},
+		peerUpdateNodesCoolDown:  atomic.Int64{},
 	}
 
 	// Set initial status

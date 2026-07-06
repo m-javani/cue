@@ -33,10 +33,12 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/testutils"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"go.yaml.in/yaml/v3"
 )
 
 type ClusterInfoResponse struct {
@@ -56,13 +58,14 @@ type NodeProbeResult struct {
 type Option func(*options)
 
 type options struct {
-	image      string
-	nodeCount  int
-	configData []byte
-	authData   []byte
-	network    *testcontainers.DockerNetwork
-	certsDir   string
-	domain     string
+	image         string
+	nodeCount     int
+	configData    []byte
+	authData      []byte
+	discoveryData []byte
+	network       *testcontainers.DockerNetwork
+	certsDir      string
+	domain        string
 }
 
 func defaultOptions() *options {
@@ -79,6 +82,9 @@ func WithConfigYAML(data []byte) Option {
 }
 func WithAuthYAML(data []byte) Option {
 	return func(o *options) { o.authData = data }
+}
+func WithDiscoveryYAML(data []byte) Option {
+	return func(o *options) { o.discoveryData = data }
 }
 func WithNetwork(net *testcontainers.DockerNetwork) Option {
 	return func(o *options) { o.network = net }
@@ -107,6 +113,34 @@ type TestNode struct {
 	APIPort     string
 	ProxyPort   string
 	ClusterPort string
+}
+
+// generateDiscoveryYAML creates discovery.yml content for the test cluster
+func generateDiscoveryYAML(nodeNames []string, domain string) ([]byte, error) {
+	nodes := make([]model.PeerInfo, len(nodeNames))
+
+	for i, name := range nodeNames {
+		nodes[i] = model.PeerInfo{
+			NodeID: name,
+			IP:     name, // Use hostname (Docker network alias)
+			Identity: model.TLSIdentity{
+				Kind:  model.IdentityDNS,
+				Value: fmt.Sprintf("%s.%s", name, domain),
+			},
+		}
+	}
+
+	discovery := struct {
+		Nodes []model.PeerInfo `yaml:"nodes"`
+	}{
+		Nodes: nodes,
+	}
+
+	data, err := yaml.Marshal(discovery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal discovery.yml: %w", err)
+	}
+	return data, nil
 }
 
 func NewTestCluster(ctx context.Context, opts ...Option) (*Cluster, error) {
@@ -174,6 +208,18 @@ func NewTestCluster(ctx context.Context, opts ...Option) (*Cluster, error) {
 		nodeNames[i] = fmt.Sprintf("node%d", i+1)
 	}
 
+	discoveryData := o.discoveryData
+	if len(discoveryData) == 0 {
+		discoveryData, err = generateDiscoveryYAML(nodeNames, o.domain)
+		if err != nil {
+			return nil, fmt.Errorf("generate discovery.yml: %w", err)
+		}
+	}
+	// Write discovery.yml to temp dir (for reference)
+	if err := os.WriteFile(filepath.Join(tmpDir, "discovery.yml"), discoveryData, 0644); err != nil {
+		return nil, err
+	}
+
 	// Config template
 	var configTpl *template.Template
 	if len(o.configData) == 0 {
@@ -229,7 +275,7 @@ func NewTestCluster(ctx context.Context, opts ...Option) (*Cluster, error) {
 		wg.Add(1)
 		go func(name string) {
 			defer wg.Done()
-			node, startErr := startNode(ctx, name, nodeNames, tmpDir, o.image, configTpl, authData, net)
+			node, startErr := startNode(ctx, name, nodeNames, tmpDir, o.image, configTpl, authData, discoveryData, net)
 			if startErr != nil {
 				errOnce = fmt.Errorf("node %s: %w", name, startErr)
 				return
@@ -261,6 +307,7 @@ func startNode(
 	image string,
 	configTpl *template.Template,
 	authData []byte,
+	discoveryData []byte,
 	net *testcontainers.DockerNetwork,
 ) (*TestNode, error) {
 	voters := `["` + strings.Join(allNodes, `","`) + `"]`
@@ -270,12 +317,10 @@ func startNode(
 	if err := configTpl.Execute(&configBuf, struct {
 		NodeName      string
 		InitialVoters string
-		Peers         string
 		AuthPath      string
 	}{
 		NodeName:      name,
 		InitialVoters: voters,
-		Peers:         voters,
 		AuthPath:      authPath,
 	}); err != nil {
 		return nil, err
@@ -285,6 +330,7 @@ func startNode(
 	files := []testcontainers.ContainerFile{
 		{Reader: bytes.NewReader(configBuf.Bytes()), ContainerFilePath: "/opt/cue/configs/config.yml", FileMode: 0644},
 		{Reader: bytes.NewReader(authData), ContainerFilePath: authPath, FileMode: 0644},
+		{Reader: bytes.NewReader(discoveryData), ContainerFilePath: "/opt/cue/configs/discovery.yml", FileMode: 0644},
 	}
 
 	certEntries, _ := os.ReadDir(certsDir)
@@ -325,7 +371,6 @@ func startNode(
 			"--proxy-key", fmt.Sprintf("/opt/cue/certs/%s_key.pem", name),
 			"--proxy-ca", "/opt/cue/certs/ca_cert.pem",
 			"--initial-voters", strings.Join(allNodes, ","),
-			"--peers", strings.Join(allNodes, ","),
 			"--log-level", "debug",
 			"--log-output", "stdout",
 		},

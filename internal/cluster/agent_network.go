@@ -16,6 +16,7 @@ package cluster
 
 import (
 	"io"
+	"math/rand"
 	"slices"
 	"sync"
 	"time"
@@ -23,7 +24,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/m-javani/cue/internal"
 
-	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/utils"
 	"github.com/quic-go/quic-go"
 	"go.uber.org/zap"
@@ -248,7 +248,7 @@ func (a *ClusterAgent) handleRequestStream(nodeID string, stream *quic.Stream) {
 		return
 	}
 
-	resp, err := a.ProcessRequest(req)
+	resp, err := a.ProcessRequest(req, nodeID)
 	if err != nil {
 		a.logger.Error("failed to process request",
 			zap.String("peer_node_id", nodeID),
@@ -268,7 +268,7 @@ func (a *ClusterAgent) handleRequestStream(nodeID string, stream *quic.Stream) {
 
 // syncConnections runs periodically to sync peer connections and handle TLS reloads
 func (a *ClusterAgent) syncConnections() {
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(1000 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
@@ -277,34 +277,20 @@ func (a *ClusterAgent) syncConnections() {
 			return
 
 		case <-ticker.C:
-			// Get current peers from service discovery
-			connected := a.quicServer.GetConnectedNodeIdsAnyDirection()
-			// a.logger.Sugar().Debugf("%s CONNECTED: %v", a.nodeID, connected)
-
-			a.discovery.MergePeers(connected)
-			raftIDs := a.discovery.ListPeersRaftIDs()
-			peers := a.discovery.ListPeersAddrServerName()
-
 			// Sync QUIC connections
-			var filteredPeers []PeerResolvedInfo
-			for _, pair := range peers {
-				if pair.ServerName != a.quicServer.selfServerName {
-					filteredPeers = append(filteredPeers, pair)
-				}
-			}
-			peers = filteredPeers
-			if err := a.quicServer.SyncConnections(peers); err != nil {
+			if err := a.quicServer.SyncConnections(); err != nil {
 				a.logger.Sugar().Warnf("failed to sync connections", zap.Error(err))
 			}
 
 			// Sync outgoing list (ensure outgoing connections match incoming)
 			a.syncOutgoingList()
 
-			// Share peers with unidirectional nodes
-			a.sharePeersWithUnidirectionalNodes()
+			// let nodes that has no connection to this node, update their discovery
+			a.updateOtherNodes()
 
 			// If leader, sync learner nodes via Raft
 			if a.IsLeader() {
+				raftIDs := a.discovery.ListPeersRaftIDs()
 				select {
 				case a.ctrlCh <- ControlCmd{
 					Type:    CmdSyncLearnerNodes,
@@ -319,65 +305,90 @@ func (a *ClusterAgent) syncConnections() {
 }
 
 // syncOutgoingList ensures outgoing connections count matches incoming
-// If outgoing < incoming, fetch peer list from other nodes
 func (a *ClusterAgent) syncOutgoingList() {
-	status := a.GetStatus()
-	if status != model.NodeStatusLeaderActive && status != model.NodeStatusFollowerActive {
+	incoming := a.quicServer.GetActiveIncomingNodes()
+	outgoing := a.quicServer.GetActiveOutgoingNodes()
+
+	if len(outgoing) >= len(incoming) {
 		return
 	}
 
-	incomingNodes := a.quicServer.GetActiveIncomingNodes()
-	outgoingNodes := a.quicServer.GetActiveOutgoingNodes()
-
-	if len(outgoingNodes) < len(incomingNodes) {
-		// Need more outgoing connections - fetch peer lists from other nodes
-		go func() {
-			request := &ClusterRequest{Type: ReqPeersListQuery}
-			_ = a.broadcast(request, 50*time.Millisecond)
-		}()
+	now := time.Now().UnixMilli()
+	if now < a.peerSyncOutgoingCoolDown.Load() {
+		return
 	}
+
+	// === Key Change: Find good candidates first ===
+	candidates := a.quicServer.GetConnectedBidirectionalNodeIds()
+	if len(candidates) == 0 {
+		// No one we can safely ask right now
+		a.peerSyncOutgoingCoolDown.Store(now + 800) // shorter cooldown, retry soon
+		return
+	}
+
+	a.peerSyncOutgoingCoolDown.Store(now + 1500)
+
+	// Pick random from good candidates
+	target := candidates[rand.Intn(len(candidates))]
+
+	go func(target string) {
+		req := &ClusterRequest{Type: ReqPeersListQuery}
+		_, err := a.sendRequest(target, req)
+		if err != nil {
+			a.logger.Warn("failed to query peers list",
+				zap.String("target", target),
+				zap.Error(err))
+		}
+	}(target)
 }
 
-// sharePeersWithUnidirectionalNodes shares peer list with nodes that only have outgoing connections
-func (a *ClusterAgent) sharePeersWithUnidirectionalNodes() {
-	status := a.GetStatus()
-	if status != model.NodeStatusLeaderActive && status != model.NodeStatusFollowerActive {
-		return
-	}
-
+// updateOtherNodes shares peer list with nodes that only have outgoing connection to us
+func (a *ClusterAgent) updateOtherNodes() {
 	incomingNodes := a.quicServer.GetActiveIncomingNodes()
 	outgoingNodes := a.quicServer.GetActiveOutgoingNodes()
 
-	if len(incomingNodes) < len(outgoingNodes) {
-		// Find nodes missing incoming connections
-		incomingSet := make(map[string]bool)
-		for _, node := range incomingNodes {
-			incomingSet[node] = true
-		}
+	if len(incomingNodes) >= len(outgoingNodes) {
+		return
+	}
 
-		var nodesMissingIncoming []string
-		for _, node := range outgoingNodes {
-			if !incomingSet[node] {
-				nodesMissingIncoming = append(nodesMissingIncoming, node)
+	now := time.Now().UnixMilli()
+	if now < a.peerUpdateNodesCoolDown.Load() {
+		return
+	}
+
+	// Build set of nodes that have incoming connection
+	incomingSet := make(map[string]bool, len(incomingNodes))
+	for _, node := range incomingNodes {
+		incomingSet[node] = true
+	}
+
+	var nodesMissingIncoming []string
+	for _, node := range outgoingNodes {
+		if !incomingSet[node] {
+			nodesMissingIncoming = append(nodesMissingIncoming, node)
+		}
+	}
+
+	if len(nodesMissingIncoming) == 0 {
+		return
+	}
+
+	a.peerUpdateNodesCoolDown.Store(now + 2000) // 2s cooldown
+
+	peers := a.discovery.ListPeers()
+
+	for _, targetID := range nodesMissingIncoming {
+		go func(tid string) {
+			req := &ClusterRequest{
+				Type:       ReqAddMissingPeers,
+				AddMissing: &AddMissingPayload{Peers: peers},
 			}
-		}
-
-		// Share peer list with these nodes
-		peers := a.discovery.ListPeers()
-		for _, targetID := range nodesMissingIncoming {
-			go func(tid string) {
-				request := &ClusterRequest{
-					Type:      ReqSharedPeersList,
-					PeersList: &PeersListRespPayload{Peers: peers},
-				}
-				_, err := a.sendRequest(tid, request)
-				if err != nil {
-					a.logger.Debug("failed to share peers with node",
-						zap.String("target", tid),
-						zap.Error(err))
-				}
-			}(targetID)
-		}
+			if _, err := a.sendRequest(tid, req); err != nil {
+				a.logger.Debug("failed to share peers with node",
+					zap.String("target", tid),
+					zap.Error(err))
+			}
+		}(targetID)
 	}
 }
 
@@ -545,22 +556,8 @@ func (a *ClusterAgent) reconnectAfterTLSRotate() error {
 		default:
 		}
 
-		// Get all peers that haven't successfully reconnected yet
-		peers := a.discovery.ListPeersAddrServerName()
-		var remainingPeers []PeerResolvedInfo
-
-		for _, peer := range peers {
-			if !successfulNodes[peer.Addr] {
-				remainingPeers = append(remainingPeers, peer)
-			}
-		}
-
-		if len(remainingPeers) == 0 {
-			return nil // All reconnected
-		}
-
 		// Attempt reconnection
-		successful, err := a.quicServer.ReconnectToPeers(remainingPeers)
+		successful, err := a.quicServer.ReconnectToPeers()
 		if err != nil {
 			a.logger.Warn("reconnect attempt failed",
 				zap.Int("attempt", attempt+1),

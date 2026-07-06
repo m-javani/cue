@@ -16,12 +16,13 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
-	"slices"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/m-javani/cue/internal"
 	"github.com/m-javani/cue/internal/api"
@@ -29,8 +30,6 @@ import (
 	"github.com/m-javani/cue/internal/model"
 	"github.com/m-javani/cue/internal/proxy"
 	"github.com/m-javani/cue/internal/state"
-	"github.com/m-javani/cue/pkg/discovery"
-	"github.com/m-javani/cue/pkg/verifier"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -88,10 +87,6 @@ func Run(cfg *internal.Config) error {
 	leaderID.Store("")
 
 	// Create Gateway (Proxy QUIC server)
-	gtVerif, err := NewTLSVerifier(cfg)
-	if err != nil {
-		return err
-	}
 	gateway, err := proxy.NewGateway(
 		cfg.NodeID,
 		cfg.Proxy.CertPath,
@@ -106,25 +101,56 @@ func Run(cfg *internal.Config) error {
 		&currentTerm,
 		&members,
 		leaderID,
-		gtVerif,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create gateway: %w", err)
 	}
 
-	// Create Cluster QUIC server (internal communication)
-	clVerif, err := NewTLSVerifier(cfg)
+	// build discovery
+	var peers []model.PeerInfo
+	if cfg.Cluster.DiscoveryKind == internal.DiscoveryKindStatic.String() {
+		peers, err = cluster.LoadDiscoveryFile(cfg.Cluster.DiscoveryYMLPath)
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, peer := range peers {
+			if peer.NodeID == cfg.NodeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("in static discovery mode, self node info should be included")
+		}
+	}
+	discoveryTick := time.Duration(2 * time.Second)
+	discoveryKind, err := internal.ParseDiscoveryKind(cfg.Cluster.DiscoveryKind)
 	if err != nil {
 		return err
 	}
+	if discoveryKind == internal.DiscoveryKindStatic {
+		cfg.Cluster.DiscoveryHTTPHost = ""
+	}
+	discovery, err := cluster.NewServiceDiscovery(logger, peers, cfg.NodeID, discoveryKind, cfg.Cluster.DiscoveryHTTPHost, discoveryTick)
+	if err != nil {
+		return err
+	}
+	if discoveryKind == internal.DiscoveryKindHttp {
+		// run discovery
+		go discovery.Run(ctx)
+	}
+
+	// Create Cluster QUIC server (internal communication)
 	quicServer, err := cluster.NewClusterQUIC(
 		cfg.NodeID,
+		int(cfg.Cluster.QUICPort),
 		cfg.Cluster.CertPath,
 		cfg.Cluster.KeyPath,
 		cfg.Cluster.CACertPath,
 		cfg.GetClusterAddr(),
 		logger,
-		clVerif,
+		discovery,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster QUIC server: %w", err)
@@ -134,15 +160,7 @@ func Run(cfg *internal.Config) error {
 		return fmt.Errorf("initial voters should not be empty")
 	}
 
-	if len(cfg.Cluster.Peers) == 0 {
-		cfg.Cluster.Peers = slices.Clone(cfg.Cluster.InitialVoters)
-	}
-
 	// Create ClusterAgent
-	addrResolver, err := NewAddressResolver(*cfg)
-	if err != nil {
-		return err
-	}
 	agent, err := cluster.NewClusterAgent(
 		ctx,
 		cancel,
@@ -156,7 +174,7 @@ func Run(cfg *internal.Config) error {
 		&currentTerm,
 		&members,
 		leaderID,
-		addrResolver,
+		discovery,
 		logger,
 	)
 	if err != nil {
@@ -240,81 +258,4 @@ func setupLogger(cfg internal.LoggingConfig, nodeID string) (*zap.Logger, error)
 	logger = logger.With(zap.String("node_id", nodeID))
 
 	return logger, nil
-}
-
-func NewAddressResolver(cfg internal.Config) (discovery.AddressResolver, error) {
-	var resolver discovery.AddressResolver
-
-	switch cfg.AddressResolver.Type {
-	case "service":
-		port, ok := cfg.AddressResolver.Config["port"].(int)
-		if !ok {
-			port = int(cfg.Cluster.QUICPort) // fallback to cluster port
-		}
-		resolver = discovery.NewServiceResolver(port)
-
-	case "dns":
-		domain, ok := cfg.AddressResolver.Config["domain"].(string)
-		if !ok {
-			return nil, fmt.Errorf("dns resolver requires 'domain' config field")
-		}
-		port, ok := cfg.AddressResolver.Config["port"].(int)
-		if !ok {
-			port = int(cfg.Cluster.QUICPort) // fallback to cluster port
-		}
-		resolver = discovery.NewDNSResolver(port, domain)
-
-	case "static":
-		peersRaw, ok := cfg.AddressResolver.Config["peers"].(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("static resolver requires 'peers' config map")
-		}
-		peers := make(map[string]string)
-		for k, v := range peersRaw {
-			peers[k] = v.(string)
-		}
-		resolver = discovery.StaticResolver{
-			Addresses: peers,
-		}
-
-	default:
-		return nil, fmt.Errorf("unknown address resolver type: %q", cfg.AddressResolver.Type)
-	}
-
-	return resolver, nil
-}
-
-func NewTLSVerifier(cfg *internal.Config) (verifier.TLSVerifier, error) {
-	var tlsVerifier verifier.TLSVerifier
-
-	switch cfg.TLSVerifier.Type {
-	case "dns":
-		domain, ok := cfg.TLSVerifier.Config["domain"].(string)
-		if !ok {
-			return nil, fmt.Errorf("dns verifier requires 'domain' config field")
-		}
-		tlsVerifier = verifier.DNSVerifier{
-			Domain: domain,
-		}
-
-	case "cn":
-		// No config needed
-		tlsVerifier = verifier.CNVerifier{}
-
-	case "spiffe":
-		trustDomain, ok := cfg.TLSVerifier.Config["trust_domain"].(string)
-		if !ok {
-			return nil, fmt.Errorf("spiffe verifier requires 'trust_domain' config field")
-		}
-		namespace, _ := cfg.TLSVerifier.Config["namespace"].(string) // optional
-		tlsVerifier = verifier.SPIFFEVerifier{
-			TrustDomain: trustDomain,
-			Namespace:   namespace,
-		}
-
-	default:
-		return nil, fmt.Errorf("unknown TLS verifier type: %q", cfg.TLSVerifier.Type)
-	}
-
-	return tlsVerifier, nil
 }

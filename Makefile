@@ -56,9 +56,7 @@ test:
 		./internal/api \
 		./internal/utils \
 		./internal \
-		./cmd \
-		./pkg/discovery \
-		./pkg/verifier
+		./cmd 
 	@echo "✅ Unit tests complete"
 
 # Run unit tests using gotestsum (formatted output)
@@ -73,9 +71,7 @@ test-sum:
 		./internal/api \
 		./internal/utils \
 		./internal \
-		./cmd \
-		./pkg/discovery \
-		./pkg/verifier
+		./cmd
 	@echo "✅ Unit tests complete"
 
 # Run all integration tests with coverage (fail-fast, quiet mode)

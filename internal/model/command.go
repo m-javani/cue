@@ -88,7 +88,7 @@ type Job struct {
 }
 
 type PeersListPayload struct {
-	Peers []string `msgpack:"peers"`
+	Peers []PeerInfo `msgpack:"peers"`
 }
 
 type AddNodePayload struct {

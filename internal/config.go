@@ -30,28 +30,47 @@ const (
 	DefaultRaftElectionTick  = 20
 )
 
+type DiscoveryKind uint8
+
+const (
+	DiscoveryKindStatic DiscoveryKind = iota
+	DiscoveryKindHttp
+)
+
+// String returns the string representation of DiscoveryKind
+func (d DiscoveryKind) String() string {
+	switch d {
+	case DiscoveryKindStatic:
+		return "static"
+	case DiscoveryKindHttp:
+		return "http"
+	default:
+		return "unknown"
+	}
+}
+
+// ParseDiscoveryKind converts a string to DiscoveryKind
+func ParseDiscoveryKind(s string) (DiscoveryKind, error) {
+	switch strings.ToLower(s) {
+	case "static":
+		return DiscoveryKindStatic, nil
+	case "http":
+		return DiscoveryKindHttp, nil
+	default:
+		return DiscoveryKindStatic, fmt.Errorf("unknown discovery kind: %s", s)
+	}
+}
+
 // Config is the single source of truth for the whole application
 type Config struct {
-	NodeID          string          `mapstructure:"node_id"`
-	DataDir         string          `mapstructure:"data_dir"`
-	Cluster         ClusterConfig   `mapstructure:"cluster"`
-	Proxy           ProxyConfig     `mapstructure:"proxy"`
-	WAL             WALConfig       `mapstructure:"wal"`
-	Partition       PartitionConfig `mapstructure:"partition"`
-	Logging         LoggingConfig   `mapstructure:"logging"`
-	ApiConfig       ApiConfig       `mapstructure:"api"`
-	AddressResolver ResolverConfig  `mapstructure:"address_resolver"`
-	TLSVerifier     VerifierConfig  `mapstructure:"tls_verifier"`
-}
-
-type ResolverConfig struct {
-	Type   string         `mapstructure:"type"` // "dns", "static", "service"
-	Config map[string]any `mapstructure:"config"`
-}
-
-type VerifierConfig struct {
-	Type   string         `mapstructure:"type"` // "dns", "cn", "spiffe"
-	Config map[string]any `mapstructure:"config"`
+	NodeID    string          `mapstructure:"node_id"`
+	DataDir   string          `mapstructure:"data_dir"`
+	Cluster   ClusterConfig   `mapstructure:"cluster"`
+	Proxy     ProxyConfig     `mapstructure:"proxy"`
+	WAL       WALConfig       `mapstructure:"wal"`
+	Partition PartitionConfig `mapstructure:"partition"`
+	Logging   LoggingConfig   `mapstructure:"logging"`
+	ApiConfig ApiConfig       `mapstructure:"api"`
 }
 
 // ClusterConfig - matches what NewClusterAgent expects
@@ -59,7 +78,6 @@ type ClusterConfig struct {
 	InitialVoters        []string `mapstructure:"initial_voters"`
 	ListenAddr           string   `mapstructure:"listen_addr"`
 	QUICPort             uint16   `mapstructure:"quic_port"`
-	Peers                []string `mapstructure:"peers"`
 	SnapshotIntervalSec  uint64   `mapstructure:"snapshot_interval_sec"`
 	SnapshotTriggerCount uint64   `mapstructure:"snapshot_trigger_count"`
 	WALFlushThreshold    int      `mapstructure:"wal_flush_threshold"`
@@ -70,6 +88,12 @@ type ClusterConfig struct {
 	RaftTickMs           int      `mapstructure:"raft_tick_ms"`
 	RaftHeartbeatTick    int      `mapstructure:"raft_heartbeat_tick"`
 	RaftElectionTick     int      `mapstructure:"raft_election_tick"`
+
+	// Discovery configuration
+	DiscoveryKind     string `mapstructure:"discovery_kind"`
+	DiscoveryYMLPath  string `mapstructure:"discovery_yml_path"`  // Required for DiscoveryKindStatic
+	DiscoveryHTTPHost string `mapstructure:"discovery_http_host"` // Required for DiscoveryKindHttp
+
 	// Logger is set at runtime
 	// Logger *zap.Logger `mapstructure:"-"`
 }
@@ -202,6 +226,14 @@ func setDefaults() {
 	viper.SetDefault("cluster.raft_tick_ms", DefaultRaftTickMs)
 	viper.SetDefault("cluster.raft_heartbeat_tick", DefaultRaftHeartbeatTick)
 	viper.SetDefault("cluster.raft_election_tick", DefaultRaftElectionTick)
+	viper.SetDefault("cluster.discovery_kind", "static")
+	viper.SetDefault("cluster.discovery_yml_path", "./discovery.yml")
+	viper.SetDefault("cluster.discovery_http_host", "")
+
+	// Discovery defaults
+	viper.SetDefault("cluster.discovery_kind", "static")
+	viper.SetDefault("cluster.discovery_yml_path", "./discovery.yml")
+	viper.SetDefault("cluster.discovery_http_host", "")
 
 	// Proxy defaults
 	viper.SetDefault("proxy.addr", "0.0.0.0")
@@ -252,6 +284,11 @@ func (c *Config) Validate() error {
 		errs = append(errs, "proxy TLS paths cannot be empty")
 	}
 
+	// Validate discovery configuration
+	if err := validateDiscoveryConfig(&c.Cluster); err != nil {
+		errs = append(errs, err.Error())
+	}
+
 	// Remove the early return and let validateRaftConfig handle all errors
 	raftErrs, raftWarns := validateRaftConfig(&c.Cluster)
 	errs = append(errs, raftErrs...)
@@ -269,60 +306,6 @@ func (c *Config) Validate() error {
 
 	c.Partition.MaxRetries = min(max(c.Partition.MaxRetries, 1), 10)
 
-	// Validate address resolver
-	validResolvers := map[string]bool{
-		"service": true,
-		"dns":     true,
-		"static":  true,
-	}
-	if !validResolvers[c.AddressResolver.Type] {
-		errs = append(errs, fmt.Sprintf("unknown address_resolver type: %q (valid: dns, static, service)", c.AddressResolver.Type))
-	}
-
-	// Validate TLS verifier
-	validVerifiers := map[string]bool{
-		"dns":    true,
-		"cn":     true,
-		"spiffe": true,
-	}
-	if !validVerifiers[c.TLSVerifier.Type] {
-		errs = append(errs, fmt.Sprintf("unknown tls_verifier type: %q (valid: dns, cn, spiffe)", c.TLSVerifier.Type))
-	}
-
-	// Address resolver config validation
-	switch c.AddressResolver.Type {
-	case "service":
-		if _, ok := c.AddressResolver.Config["domain"]; ok {
-			errs = append(errs, "address_resolver service should not contain 'domain' in config")
-		}
-	case "dns":
-		if _, ok := c.AddressResolver.Config["domain"]; !ok {
-			errs = append(errs, "address_resolver dns requires 'domain' in config")
-		}
-	case "static":
-		if _, ok := c.AddressResolver.Config["peers"]; !ok {
-			errs = append(errs, "address_resolver static requires 'peers' map in config")
-		}
-	}
-
-	// TLS verifier config validation
-	switch c.TLSVerifier.Type {
-	case "dns":
-		if _, ok := c.TLSVerifier.Config["domain"]; !ok {
-			errs = append(errs, "tls_verifier dns requires 'domain' in config")
-		}
-	case "cn":
-		if len(c.TLSVerifier.Config) > 0 {
-			for key := range c.TLSVerifier.Config {
-				errs = append(errs, fmt.Sprintf("tls_verifier cn does not accept config fields, but found key: %q", key))
-			}
-		}
-	case "spiffe":
-		if _, ok := c.TLSVerifier.Config["trust_domain"]; !ok {
-			errs = append(errs, "tls_verifier spiffe requires 'trust_domain' in config")
-		}
-	}
-
 	// Log warnings (could be integrated with proper logging)
 	for _, w := range warnings {
 		fmt.Printf("[WARN] %s\n", w)
@@ -330,6 +313,32 @@ func (c *Config) Validate() error {
 
 	if len(errs) > 0 {
 		return fmt.Errorf("validation failed:\n- %s", strings.Join(errs, "\n- "))
+	}
+
+	return nil
+}
+
+// validateDiscoveryConfig validates the discovery configuration
+// validateDiscoveryConfig validates the discovery configuration
+func validateDiscoveryConfig(cfg *ClusterConfig) error {
+	kind, err := ParseDiscoveryKind(cfg.DiscoveryKind)
+	if err != nil {
+		return fmt.Errorf("invalid discovery_kind '%s': %w", cfg.DiscoveryKind, err)
+	}
+
+	switch kind {
+	case DiscoveryKindStatic:
+		if strings.TrimSpace(cfg.DiscoveryYMLPath) == "" {
+			return fmt.Errorf("discovery_yml_path is required when discovery_kind=static")
+		}
+
+	case DiscoveryKindHttp:
+		if strings.TrimSpace(cfg.DiscoveryHTTPHost) == "" {
+			return fmt.Errorf("discovery_http_host is required when discovery_kind=http")
+		}
+
+	default:
+		return fmt.Errorf("unsupported discovery kind: %s", cfg.DiscoveryKind)
 	}
 
 	return nil

@@ -22,7 +22,6 @@ cluster:
   key_path: "./certs/node1_key.pem"
   ca_path: "./certs/ca_cert.pem"
   initial_voters: ["node1","node2","node3"]
-  peers: ["node1","node2","node3"]
   snapshot_interval_sec: 60
   snapshot_trigger_count: 10000
   wal_flush_threshold: 1000
@@ -30,7 +29,10 @@ cluster:
   raft_tick_ms: 100 # 100ms
   raft_heartbeat_tick: 3 # with 100ms tick = 300ms
   raft_election_tick: 30 # with 100ms tick = 3 seconds
-
+  discovery_kind: "static"  # or "http"
+  discovery_yml_path: "./discovery.yml"  # required for static
+  discovery_http_host: "" # "http://discovery-service:8080"  required for http
+  
 proxy:
   addr: "0.0.0.0"
   port: 8322
@@ -59,16 +61,3 @@ api:
   listen_addr: "0.0.0.0"
   api_port: 8321
   token_path: "./configs/auth.yml"
-
-address_resolver:
-  type: service # dns, static, service
-  #config:
-    #domain: ""
-    #port: 8323
-
-tls_verifier:
-  type: cn # cn, dns, spiffe
-  # config:
-  #   domain: "localhost"
-
-    
