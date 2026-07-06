@@ -44,13 +44,6 @@ const (
 	ConnectionTypeOutbound ConnectionType = "outbound"
 )
 
-type HandshakeStatus string
-
-const (
-	HandshakeStatusOk  HandshakeStatus = "ok"
-	HandshakeStatusErr HandshakeStatus = "error"
-)
-
 // Handshake represents the initial handshake message from proxy
 type Handshake struct {
 	ProxyID         string         `msgpack:"proxy_id"`
@@ -60,9 +53,9 @@ type Handshake struct {
 
 // HandshakeResponse sent back to proxy
 type HandshakeResponse struct {
-	Status  HandshakeStatus `msgpack:"status"`
-	Message string          `msgpack:"message,omitempty"`
-	NodeID  string          `msgpack:"node_id"`
+	Status  string `msgpack:"status"`
+	Message string `msgpack:"message,omitempty"`
+	NodeID  string `msgpack:"node_id"`
 }
 
 type AddTopicRequest struct {
@@ -929,8 +922,9 @@ func (g *Gateway) handleConnection(conn *quic.Conn) {
 
 	// Send response
 	response := HandshakeResponse{
-		Status: HandshakeStatusOk,
-		NodeID: g.selfNodeID,
+		Status:  "ok",
+		Message: "",
+		NodeID:  g.selfNodeID,
 	}
 	encoder := msgpack.NewEncoder(stream)
 	if err := encoder.Encode(response); err != nil {
