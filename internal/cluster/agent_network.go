@@ -565,8 +565,21 @@ func (a *ClusterAgent) reconnectAfterTLSRotate() error {
 		default:
 		}
 
+		peers := a.discovery.ListPeers()
+		var remainingPeers []model.PeerInfo
+
+		for _, peer := range peers {
+			if !successfulNodes[peer.NodeID] {
+				remainingPeers = append(remainingPeers, peer)
+			}
+		}
+
+		if len(remainingPeers) == 0 {
+			return nil // All reconnected
+		}
+
 		// Attempt reconnection
-		successful, err := a.quicServer.ReconnectToPeers()
+		successful, err := a.quicServer.ReconnectToPeers(remainingPeers)
 		if err != nil {
 			a.logger.Warn("reconnect attempt failed",
 				zap.Int("attempt", attempt+1),

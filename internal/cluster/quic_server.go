@@ -64,8 +64,6 @@ type ClusterQUIC struct {
 	incomingConns         map[string]*quic.Conn
 	retiringIncomingConns []retiringConn
 
-	nodeToServerName map[string]string
-
 	tlsVersion atomic.Value
 	logger     *zap.Logger
 	mu         sync.RWMutex
@@ -149,7 +147,6 @@ func NewClusterQUIC(
 		addr:                  addr,
 		outgoingConns:         make(map[string]*quic.Conn),
 		incomingConns:         make(map[string]*quic.Conn),
-		nodeToServerName:      make(map[string]string),
 		tlsVersion:            atomic.Value{},
 		logger:                logger,
 		discovery:             discovery,
@@ -772,7 +769,6 @@ func (s *ClusterQUIC) SyncConnections() error {
 	for nodeID, conn := range s.outgoingConns {
 		if _, stillDesired := desired[nodeID]; !stillDesired || conn.Context().Err() != nil {
 			delete(s.outgoingConns, nodeID)
-			delete(s.nodeToServerName, nodeID)
 		}
 	}
 
@@ -816,8 +812,7 @@ func (s *ClusterQUIC) SyncConnections() error {
 }
 
 // ReconnectToPeers attempts to reconnect to all known peers and returns successfully reconnected addresses
-func (s *ClusterQUIC) ReconnectToPeers() ([]string, error) {
-	peers := s.discovery.ListPeers()
+func (s *ClusterQUIC) ReconnectToPeers(peers []model.PeerInfo) ([]string, error) {
 
 	var wg sync.WaitGroup
 	results := make(chan struct {

@@ -615,7 +615,7 @@ func TestQuicServer_ReconnectToPeers(t *testing.T) {
 	node2.Discovery.UpdatePeers(peers)
 	node3.Discovery.UpdatePeers(peers)
 	// Reconnect to peers (reads from own discovery)
-	successful, err := node1.Server.ReconnectToPeers()
+	successful, err := node1.Server.ReconnectToPeers(peers)
 	require.NoError(t, err)
 	assert.Len(t, successful, 2, "should reconnect to both peers")
 
@@ -641,7 +641,7 @@ func TestQuicServer_ReconnectToPeers_InvalidPeers(t *testing.T) {
 		},
 	}
 	node1.Discovery.UpdatePeers(peers)
-	successful, err := node1.Server.ReconnectToPeers()
+	successful, err := node1.Server.ReconnectToPeers(peers)
 	assert.NoError(t, err, "should not return error for invalid peers")
 	assert.Empty(t, successful, "should not connect to invalid peers")
 }
