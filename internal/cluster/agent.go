@@ -100,7 +100,8 @@ type ClusterAgent struct {
 
 	metrics *internal.ClusterMetrics
 
-	members *model.Members
+	members   *model.Members
+	peerStore *model.PeerStore
 
 	logger *zap.Logger
 
@@ -121,6 +122,7 @@ func NewClusterAgent(
 	status *atomic.Uint32,
 	currentTerm *atomic.Uint64,
 	members *model.Members,
+	peerStore *model.PeerStore,
 	leaderID *atomic.Value,
 	discovery *ServiceDiscovery,
 	logger *zap.Logger) (*ClusterAgent, error) {
@@ -174,6 +176,7 @@ func NewClusterAgent(
 		lastSnapshotTrySec:       atomic.Int64{},
 		lastCertFingerprint:      "",
 		members:                  members,
+		peerStore:                peerStore,
 		raftTickMs:               cfg.RaftTickMs,
 		raftHeartbeatTick:        cfg.RaftHeartbeatTick,
 		raftElectionTick:         cfg.RaftElectionTick,

@@ -1346,3 +1346,177 @@ func TestPeerInfo_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoveryInfo_Get(t *testing.T) {
+	// Create a DiscoveryInfo with some initial data
+	d := &PeerStore{
+		Peers: map[string]PeerInfo{
+			"node1": {
+				NodeID: "node1",
+				IP:     "192.168.1.1",
+				Port:   8080,
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "node1.example.com",
+				},
+			},
+			"node2": {
+				NodeID: "node2",
+				IP:     "192.168.1.2",
+				Port:   8080,
+				Identity: TLSIdentity{
+					Kind:  IdentityIP,
+					Value: "192.168.1.2",
+				},
+			},
+		},
+	}
+
+	// Get a copy of the peers
+	peers := d.Get()
+
+	// Verify all peers are present
+	if len(peers) != 2 {
+		t.Errorf("Expected 2 peers, got %d", len(peers))
+	}
+
+	if _, ok := peers["node1"]; !ok {
+		t.Error("Expected node1 to be present")
+	}
+	if _, ok := peers["node2"]; !ok {
+		t.Error("Expected node2 to be present")
+	}
+
+	// Verify it's a copy (modifying returned map doesn't affect original)
+	delete(peers, "node1")
+	if len(d.Peers) != 2 {
+		t.Errorf("Original map should still have 2 peers, got %d", len(d.Peers))
+	}
+}
+
+func TestDiscoveryInfo_GetByNodeID(t *testing.T) {
+	d := &PeerStore{
+		Peers: map[string]PeerInfo{
+			"node1": {
+				NodeID: "node1",
+				IP:     "192.168.1.1",
+				Port:   8080,
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "node1.example.com",
+				},
+			},
+		},
+	}
+
+	// Test existing peer
+	peer, exists := d.Lookup("node1")
+	if !exists {
+		t.Error("Expected node1 to exist")
+	}
+	if peer.NodeID != "node1" {
+		t.Errorf("Expected NodeID 'node1', got '%s'", peer.NodeID)
+	}
+	if peer.IP != "192.168.1.1" {
+		t.Errorf("Expected IP '192.168.1.1', got '%s'", peer.IP)
+	}
+
+	// Test non-existent peer
+	_, exists = d.Lookup("node3")
+	if exists {
+		t.Error("Expected node3 to not exist")
+	}
+}
+
+func TestDiscoveryInfo_Update(t *testing.T) {
+	d := &PeerStore{
+		Peers: map[string]PeerInfo{
+			"node1": {
+				NodeID: "node1",
+				IP:     "192.168.1.1",
+				Port:   8080,
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "node1.example.com",
+				},
+			},
+		},
+	}
+
+	// New peers to update with
+	newPeers := map[string]PeerInfo{
+		"node2": {
+			NodeID: "node2",
+			IP:     "192.168.1.2",
+			Port:   9090,
+			Identity: TLSIdentity{
+				Kind:  IdentityIP,
+				Value: "192.168.1.2",
+			},
+		},
+		"node3": {
+			NodeID: "node3",
+			IP:     "192.168.1.3",
+			Port:   9090,
+			Identity: TLSIdentity{
+				Kind:  IdentitySPIFFE,
+				Value: "spiffe://example.com/node3",
+			},
+		},
+	}
+
+	d.Set(newPeers)
+
+	// Verify old peer is gone
+	if _, ok := d.Peers["node1"]; ok {
+		t.Error("Expected node1 to be removed")
+	}
+
+	// Verify new peers are present
+	if _, ok := d.Peers["node2"]; !ok {
+		t.Error("Expected node2 to be present")
+	}
+	if _, ok := d.Peers["node3"]; !ok {
+		t.Error("Expected node3 to be present")
+	}
+
+	// Verify all peers are present
+	if len(d.Peers) != 2 {
+		t.Errorf("Expected 2 peers, got %d", len(d.Peers))
+	}
+
+	// Test update with empty map clears everything
+	d.Set(map[string]PeerInfo{})
+	if len(d.Peers) != 0 {
+		t.Errorf("Expected 0 peers after empty update, got %d", len(d.Peers))
+	}
+}
+
+func TestDiscoveryInfo_ConcurrentAccess(t *testing.T) {
+	d := &PeerStore{
+		Peers: make(map[string]PeerInfo),
+	}
+
+	// Run concurrent reads and writes
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			nodeID := "node" + string(rune(i))
+			peer := PeerInfo{
+				NodeID: nodeID,
+				IP:     "192.168.1.1",
+				Port:   8080,
+				Identity: TLSIdentity{
+					Kind:  IdentityDNS,
+					Value: "example.com",
+				},
+			}
+			d.Set(map[string]PeerInfo{nodeID: peer})
+			d.Get()
+			d.Lookup(nodeID)
+		}(i)
+	}
+	wg.Wait()
+}

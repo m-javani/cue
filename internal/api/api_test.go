@@ -37,7 +37,7 @@ import (
 // Test Helpers
 // =============================================================================
 
-func setupTestAPI(t *testing.T) (*AdminAPI, *model.Members, *atomic.Value, chan model.Command, string, func()) {
+func setupTestAPI(t *testing.T) (*AdminAPI, *model.Members, *model.PeerStore, *atomic.Value, chan model.Command, string, func()) {
 	logger, err := testutils.NewDevLogger()
 	require.NoError(t, err)
 
@@ -64,17 +64,23 @@ func setupTestAPI(t *testing.T) (*AdminAPI, *model.Members, *atomic.Value, chan 
 	members := &model.Members{}
 	members.Update([]string{"node1", "node2"}, []string{"learner1"})
 
+	// Create peer store
+	peerStore := &model.PeerStore{
+		Peers: make(map[string]model.PeerInfo),
+	}
+
 	// Create leaderID
 	leaderID := &atomic.Value{}
 	leaderID.Store("node1")
 
-	// Create API - this takes send-only channel
+	// Create API
 	api := NewAdminAPI(
 		"127.0.0.1",
 		0, // Use random port
 		authFile,
-		commandCh, // This is chan<- model.Command in the API
+		commandCh,
 		members,
+		peerStore, // Add this
 		leaderID,
 		logger,
 	)
@@ -98,8 +104,7 @@ func setupTestAPI(t *testing.T) (*AdminAPI, *model.Members, *atomic.Value, chan 
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Return the bidirectional channel so we can both send and receive
-	return api, members, leaderID, commandCh, authFile, cleanup
+	return api, members, peerStore, leaderID, commandCh, authFile, cleanup
 }
 
 func makeRequest(t *testing.T, api *AdminAPI, method, path, token string, body interface{}) *httptest.ResponseRecorder {
@@ -198,7 +203,7 @@ func makeRequestAndExpectClusterBusy(t *testing.T, api *AdminAPI, commandCh chan
 }
 
 func TestAdminAPI_AddVoter(t *testing.T) {
-	api, _, _, commandCh, _, cleanup := setupTestAPI(t)
+	api, _, _, _, commandCh, _, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	tests := []struct {
@@ -277,7 +282,7 @@ func TestAdminAPI_AddVoter(t *testing.T) {
 }
 
 func TestAdminAPI_RemoveVoter(t *testing.T) {
-	api, _, _, commandCh, _, cleanup := setupTestAPI(t)
+	api, _, _, _, commandCh, _, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	tests := []struct {
@@ -355,7 +360,7 @@ func TestAdminAPI_RemoveVoter(t *testing.T) {
 }
 
 func TestAdminAPI_TransferLeader(t *testing.T) {
-	api, _, _, commandCh, _, cleanup := setupTestAPI(t)
+	api, _, _, _, commandCh, _, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	tests := []struct {
@@ -432,7 +437,7 @@ func TestAdminAPI_TransferLeader(t *testing.T) {
 	}
 }
 func TestAdminAPI_CommandTimeout(t *testing.T) {
-	api, _, _, commandCh, _, cleanup := setupTestAPI(t)
+	api, _, _, _, commandCh, _, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	// Make request but don't respond to command
@@ -448,7 +453,7 @@ func TestAdminAPI_CommandTimeout(t *testing.T) {
 }
 
 func TestAdminAPI_ClusterBusy(t *testing.T) {
-	api, _, _, commandCh, _, cleanup := setupTestAPI(t)
+	api, _, _, _, commandCh, _, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	rr := makeRequestAndExpectClusterBusy(t, api, commandCh, http.MethodPost, "/cluster/promote-learner", "abc123",
@@ -479,7 +484,7 @@ func TestNextRequestID(t *testing.T) {
 }
 
 func TestAdminAPI_Health(t *testing.T) {
-	api, _, _, _, _, cleanup := setupTestAPI(t)
+	api, _, _, _, _, _, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	rr := makeRequest(t, api, http.MethodGet, "/health", "", nil)
@@ -493,7 +498,7 @@ func TestAdminAPI_Health(t *testing.T) {
 }
 
 func TestAdminAPI_GetClusterInfo(t *testing.T) {
-	api, members, leaderID, _, _, cleanup := setupTestAPI(t)
+	api, members, _, leaderID, _, _, cleanup := setupTestAPI(t)
 	defer cleanup()
 
 	// Setup known state
@@ -524,4 +529,123 @@ func TestAdminAPI_GetClusterInfo(t *testing.T) {
 	learners, ok := membersMap["learners"].([]any)
 	require.True(t, ok, "learners should be a slice")
 	assert.ElementsMatch(t, []any{"learner1", "learner2"}, learners)
+}
+
+func TestAdminAPI_DiscoveryGetAllPeers(t *testing.T) {
+	api, _, _, _, _, _, cleanup := setupTestAPI(t)
+	defer cleanup()
+
+	// Populate peer store with test data
+	testPeers := map[string]model.PeerInfo{
+		"node1": {
+			NodeID: "node1",
+			IP:     "192.168.1.1",
+			Port:   8080,
+			Identity: model.TLSIdentity{
+				Kind:  model.IdentityDNS,
+				Value: "node1.example.com",
+			},
+		},
+		"node2": {
+			NodeID: "node2",
+			IP:     "192.168.1.2",
+			Port:   8080,
+			Identity: model.TLSIdentity{
+				Kind:  model.IdentityIP,
+				Value: "192.168.1.2",
+			},
+		},
+	}
+	api.peerStore.Set(testPeers)
+
+	rr := makeRequest(t, api, http.MethodGet, "/discovery/peers", "", nil)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp map[string]model.PeerInfo
+	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	assert.Len(t, resp, 2)
+	assert.Equal(t, "192.168.1.1", resp["node1"].IP)
+	assert.Equal(t, "node2", resp["node2"].NodeID)
+}
+
+func TestAdminAPI_DiscoveryGetPeerByID(t *testing.T) {
+	api, _, _, _, _, _, cleanup := setupTestAPI(t)
+	defer cleanup()
+
+	// Populate peer store with test data
+	testPeers := map[string]model.PeerInfo{
+		"node1": {
+			NodeID: "node1",
+			IP:     "192.168.1.1",
+			Port:   8080,
+			Identity: model.TLSIdentity{
+				Kind:  model.IdentityDNS,
+				Value: "node1.example.com",
+			},
+		},
+	}
+	api.peerStore.Set(testPeers)
+
+	tests := []struct {
+		name         string
+		nodeID       string
+		expectedCode int
+	}{
+		{
+			name:         "existing peer",
+			nodeID:       "node1",
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:         "non-existent peer",
+			nodeID:       "node99",
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:         "empty nodeID",
+			nodeID:       "",
+			expectedCode: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := "/discovery/peers/" + tt.nodeID
+			rr := makeRequest(t, api, http.MethodGet, path, "", nil)
+			assert.Equal(t, tt.expectedCode, rr.Code)
+
+			if tt.expectedCode == http.StatusOK {
+				var peer model.PeerInfo
+				err := json.Unmarshal(rr.Body.Bytes(), &peer)
+				require.NoError(t, err)
+				assert.Equal(t, "node1", peer.NodeID)
+				assert.Equal(t, "192.168.1.1", peer.IP)
+			}
+		})
+	}
+}
+
+func TestAdminAPI_DiscoveryMethodNotAllowed(t *testing.T) {
+	api, _, _, _, _, _, cleanup := setupTestAPI(t)
+	defer cleanup()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{"POST on /discovery/peers", http.MethodPost, "/discovery/peers"},
+		{"PUT on /discovery/peers", http.MethodPut, "/discovery/peers"},
+		{"POST on /discovery/peers/node1", http.MethodPost, "/discovery/peers/node1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rr := makeRequest(t, api, tt.method, tt.path, "", nil)
+			assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+		})
+	}
 }
