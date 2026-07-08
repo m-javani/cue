@@ -167,7 +167,7 @@ func (h *quicTestHelper) connectNodes(from, to *quicTestNode) error {
 	ipTo, _, _ := strings.Cut(to.Addr, ":")
 	peerTo := model.PeerInfo{
 		NodeID: to.ID,
-		IP:     ipTo,
+		Host:   ipTo,
 		Identity: model.TLSIdentity{
 			Kind:  model.IdentityDNS,
 			Value: to.ID + ".localhost",
@@ -176,7 +176,7 @@ func (h *quicTestHelper) connectNodes(from, to *quicTestNode) error {
 	}
 	peerFrom := model.PeerInfo{
 		NodeID: from.ID,
-		IP:     ipFrom,
+		Host:   ipFrom,
 		Identity: model.TLSIdentity{
 			Kind:  model.IdentityDNS,
 			Value: from.ID + ".localhost",
@@ -452,7 +452,7 @@ func TestQuicServer_Handshake_SelfConnection(t *testing.T) {
 	selfIP, _, _ := strings.Cut(node1.Addr, ":")
 	selfPeer := []model.PeerInfo{{
 		NodeID: node1.ID,
-		IP:     selfIP,
+		Host:   selfIP,
 		Identity: model.TLSIdentity{
 			Kind:  model.IdentityDNS,
 			Value: node1.ID + ".localhost",
@@ -511,7 +511,7 @@ func TestQuicServer_Handshake_Wrong_Address(t *testing.T) {
 	node2 := h.createNode("node2")
 	peerTo := model.PeerInfo{
 		NodeID: "node2",
-		IP:     "127.0.0.10",
+		Host:   "127.0.0.10",
 		Identity: model.TLSIdentity{
 			Kind:  model.IdentityDNS,
 			Value: "node2.xxx",
@@ -585,7 +585,7 @@ func TestQuicServer_ReconnectToPeers(t *testing.T) {
 	peers := []model.PeerInfo{
 		{
 			NodeID: node1.ID,
-			IP:     ip1,
+			Host:   ip1,
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityDNS,
 				Value: node1.ID + ".localhost",
@@ -594,7 +594,7 @@ func TestQuicServer_ReconnectToPeers(t *testing.T) {
 		},
 		{
 			NodeID: node2.ID,
-			IP:     ip2,
+			Host:   ip2,
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityDNS,
 				Value: node2.ID + ".localhost",
@@ -603,7 +603,7 @@ func TestQuicServer_ReconnectToPeers(t *testing.T) {
 		},
 		{
 			NodeID: node3.ID,
-			IP:     ip3,
+			Host:   ip3,
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityDNS,
 				Value: node3.ID + ".localhost",
@@ -633,7 +633,7 @@ func TestQuicServer_ReconnectToPeers_InvalidPeers(t *testing.T) {
 	peers := []model.PeerInfo{
 		{
 			NodeID: "invalid",
-			IP:     "invalid-address",
+			Host:   "invalid-address",
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityDNS,
 				Value: "invalid.local",

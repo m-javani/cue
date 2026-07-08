@@ -539,7 +539,7 @@ func TestAdminAPI_DiscoveryGetAllPeers(t *testing.T) {
 	testPeers := map[string]model.PeerInfo{
 		"node1": {
 			NodeID: "node1",
-			IP:     "192.168.1.1",
+			Host:   "192.168.1.1",
 			Port:   8080,
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityDNS,
@@ -548,7 +548,7 @@ func TestAdminAPI_DiscoveryGetAllPeers(t *testing.T) {
 		},
 		"node2": {
 			NodeID: "node2",
-			IP:     "192.168.1.2",
+			Host:   "192.168.1.2",
 			Port:   8080,
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityIP,
@@ -567,7 +567,7 @@ func TestAdminAPI_DiscoveryGetAllPeers(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, resp, 2)
-	assert.Equal(t, "192.168.1.1", resp["node1"].IP)
+	assert.Equal(t, "192.168.1.1", resp["node1"].Host)
 	assert.Equal(t, "node2", resp["node2"].NodeID)
 }
 
@@ -579,7 +579,7 @@ func TestAdminAPI_DiscoveryGetPeerByID(t *testing.T) {
 	testPeers := map[string]model.PeerInfo{
 		"node1": {
 			NodeID: "node1",
-			IP:     "192.168.1.1",
+			Host:   "192.168.1.1",
 			Port:   8080,
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityDNS,
@@ -622,7 +622,7 @@ func TestAdminAPI_DiscoveryGetPeerByID(t *testing.T) {
 				err := json.Unmarshal(rr.Body.Bytes(), &peer)
 				require.NoError(t, err)
 				assert.Equal(t, "node1", peer.NodeID)
-				assert.Equal(t, "192.168.1.1", peer.IP)
+				assert.Equal(t, "192.168.1.1", peer.Host)
 			}
 		})
 	}

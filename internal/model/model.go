@@ -113,13 +113,13 @@ func (i TLSIdentity) Validate() error {
 
 type PeerInfo struct {
 	NodeID   string      `msgpack:"node_id" json:"node_id" yaml:"node_id"`
-	IP       string      `msgpack:"ip" json:"ip" yaml:"ip"`
-	Identity TLSIdentity `msgpack:"identity" json:"identity" yaml:"identity"`
+	Host     string      `msgpack:"host" json:"host" yaml:"host"`
 	Port     uint16      `msgpack:"port" json:"port" yaml:"port"`
+	Identity TLSIdentity `msgpack:"identity" json:"identity" yaml:"identity"`
 }
 
 func (p PeerInfo) String() string {
-	return fmt.Sprintf("NodeID:%s, IP:%s, Port:%d, Identity:%s", p.NodeID, p.IP, p.Port, p.Identity.String())
+	return fmt.Sprintf("NodeID:%s, IP:%s, Port:%d, Identity:%s", p.NodeID, p.Host, p.Port, p.Identity.String())
 }
 
 func (p PeerInfo) Validate() error {
@@ -131,12 +131,11 @@ func (p PeerInfo) Validate() error {
 		return fmt.Errorf("node_id too long (max 64 characters)")
 	}
 
-	// IP address (using stdlib net.ParseIP)
-	if strings.TrimSpace(p.IP) == "" {
-		return fmt.Errorf("ip is required")
-	}
-	if net.ParseIP(p.IP) == nil {
-		return fmt.Errorf("invalid IP address: %s", p.IP)
+	// Host is optional - only validate if provided
+	if strings.TrimSpace(p.Host) != "" {
+		if net.ParseIP(p.Host) == nil {
+			return fmt.Errorf("invalid IP address: %s", p.Host)
+		}
 	}
 
 	// Identity

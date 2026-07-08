@@ -277,7 +277,7 @@ func (s *ClusterQUIC) VerifyTLSIdentity(cert *x509.Certificate, expected model.T
 
 	case model.IdentitySPIFFE:
 		for _, uri := range cert.URIs {
-			if uri.String() == expected.Value {
+			if uri.Scheme == "spiffe" && uri.String() == expected.Value {
 				return nil
 			}
 		}
@@ -488,7 +488,11 @@ func (s *ClusterQUIC) Connect(ctx context.Context, nodeID string) error {
 	if peerInfo.Port != 0 {
 		port = int(peerInfo.Port)
 	}
-	remoteAddr := net.JoinHostPort(peerInfo.IP, strconv.Itoa(port))
+	host := peerInfo.Host
+	if host == "" {
+		host = peerInfo.NodeID
+	}
+	remoteAddr := net.JoinHostPort(host, strconv.Itoa(port))
 
 	tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {

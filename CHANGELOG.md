@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.0] - 2026-07-06
+## [0.3.0] - 2026-07-08
 ### Changed
 - **BREAKING**: Redesigned service discovery architecture
 - Decoupled node identity from discovery and TLS verification
@@ -9,6 +9,10 @@
 - Added static discovery as fallback mechanism
 - Updated sync connections, self-discovery functions, and configs
 - Updated models and tests to align with new architecture
+- Renamed `IP` to `Host` in `PeerInfo` for clarity (internal vs. external addressing)
+
+### Fixed
+- TLS identity verification updated to match new `Host` field semantics
 
 ## [0.2.0] - 2026-07-01
 ### Changed

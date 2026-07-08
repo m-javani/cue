@@ -107,7 +107,7 @@ func TestClusterRequest_String(t *testing.T) {
 					Peers: []model.PeerInfo{
 						{
 							NodeID: "peer1",
-							IP:     "192.168.1.1:8080",
+							Host:   "192.168.1.1:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer1.example.com",
@@ -115,7 +115,7 @@ func TestClusterRequest_String(t *testing.T) {
 						},
 						{
 							NodeID: "peer2",
-							IP:     "192.168.1.2:8080",
+							Host:   "192.168.1.2:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer2.example.com",
@@ -141,7 +141,7 @@ func TestClusterRequest_String(t *testing.T) {
 					Peers: []model.PeerInfo{
 						{
 							NodeID: "peer1",
-							IP:     "192.168.1.1:8080",
+							Host:   "192.168.1.1:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer1.example.com",
@@ -149,7 +149,7 @@ func TestClusterRequest_String(t *testing.T) {
 						},
 						{
 							NodeID: "peer2",
-							IP:     "192.168.1.2:8080",
+							Host:   "192.168.1.2:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer2.example.com",
@@ -249,7 +249,7 @@ func TestClusterResponse_String(t *testing.T) {
 					Peers: []model.PeerInfo{
 						{
 							NodeID: "peer1",
-							IP:     "192.168.1.1:8080",
+							Host:   "192.168.1.1:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer1.example.com",
@@ -257,7 +257,7 @@ func TestClusterResponse_String(t *testing.T) {
 						},
 						{
 							NodeID: "peer2",
-							IP:     "192.168.1.2:8080",
+							Host:   "192.168.1.2:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer2.example.com",
@@ -388,7 +388,7 @@ func TestClusterRequest_MarshalUnmarshal(t *testing.T) {
 					Peers: []model.PeerInfo{
 						{
 							NodeID: "peer1",
-							IP:     "192.168.1.1:8080",
+							Host:   "192.168.1.1:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer1.example.com",
@@ -397,7 +397,7 @@ func TestClusterRequest_MarshalUnmarshal(t *testing.T) {
 						},
 						{
 							NodeID: "peer2",
-							IP:     "192.168.1.2:8080",
+							Host:   "192.168.1.2:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer2.example.com",
@@ -416,7 +416,7 @@ func TestClusterRequest_MarshalUnmarshal(t *testing.T) {
 					Peers: []model.PeerInfo{
 						{
 							NodeID: "peer1",
-							IP:     "192.168.1.1:8080",
+							Host:   "192.168.1.1:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer1.example.com",
@@ -425,7 +425,7 @@ func TestClusterRequest_MarshalUnmarshal(t *testing.T) {
 						},
 						{
 							NodeID: "peer2",
-							IP:     "192.168.1.2:8080",
+							Host:   "192.168.1.2:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer2.example.com",
@@ -499,7 +499,7 @@ func TestClusterResponse_MarshalUnmarshal(t *testing.T) {
 					Peers: []model.PeerInfo{
 						{
 							NodeID: "peer1",
-							IP:     "192.168.1.1:8080",
+							Host:   "192.168.1.1:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer1.example.com",
@@ -507,7 +507,7 @@ func TestClusterResponse_MarshalUnmarshal(t *testing.T) {
 						},
 						{
 							NodeID: "peer2",
-							IP:     "192.168.1.2:8080",
+							Host:   "192.168.1.2:8080",
 							Identity: model.TLSIdentity{
 								Kind:  model.IdentityDNS,
 								Value: "peer2.example.com",
@@ -832,7 +832,7 @@ func TestClusterResponse_UnmarshalErrors(t *testing.T) {
 func TestPeerResolvedInfo_MarshalUnmarshal(t *testing.T) {
 	original := model.PeerInfo{
 		NodeID: "node-123",
-		IP:     "192.168.1.100:8080",
+		Host:   "192.168.1.100:8080",
 		Identity: model.TLSIdentity{
 			Kind:  model.IdentityDNS,
 			Value: "server.example.com",
@@ -1058,7 +1058,7 @@ func TestClusterRequest_AllTypes(t *testing.T) {
 						Peers: []model.PeerInfo{
 							{
 								NodeID: "peer1",
-								IP:     "192.168.1.1:8080",
+								Host:   "192.168.1.1:8080",
 								Identity: model.TLSIdentity{
 									Kind:  model.IdentityDNS,
 									Value: "peer1.example.com",
@@ -1074,7 +1074,7 @@ func TestClusterRequest_AllTypes(t *testing.T) {
 						Peers: []model.PeerInfo{
 							{
 								NodeID: "peer1",
-								IP:     "192.168.1.1:8080",
+								Host:   "192.168.1.1:8080",
 								Identity: model.TLSIdentity{
 									Kind:  model.IdentityDNS,
 									Value: "peer1.example.com",

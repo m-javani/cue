@@ -319,7 +319,6 @@ func (c *Config) Validate() error {
 }
 
 // validateDiscoveryConfig validates the discovery configuration
-// validateDiscoveryConfig validates the discovery configuration
 func validateDiscoveryConfig(cfg *ClusterConfig) error {
 	kind, err := ParseDiscoveryKind(cfg.DiscoveryKind)
 	if err != nil {
