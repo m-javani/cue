@@ -129,8 +129,8 @@ func (sd *ServiceDiscovery) refreshFromHTTP(ctx context.Context) ([]model.PeerIn
 	if sd.discoveryHTTPHost == "" {
 		return nil, fmt.Errorf("no HTTP endpoint configured")
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sd.discoveryHTTPHost, nil)
+	addr := fmt.Sprintf("%s?client=cue", sd.discoveryHTTPHost)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, addr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}

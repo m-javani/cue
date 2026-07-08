@@ -363,7 +363,7 @@ func TestCommandMarshalUnmarshal_Integration(t *testing.T) {
 					Peers: []PeerInfo{
 						{
 							NodeID: "node-a",
-							IP:     "192.168.1.1:8080",
+							Host:   "192.168.1.1:8080",
 							Identity: TLSIdentity{
 								Kind:  IdentityDNS,
 								Value: "node-a.example.com",
@@ -371,7 +371,7 @@ func TestCommandMarshalUnmarshal_Integration(t *testing.T) {
 						},
 						{
 							NodeID: "node-b",
-							IP:     "192.168.1.2:8080",
+							Host:   "192.168.1.2:8080",
 							Identity: TLSIdentity{
 								Kind:  IdentityDNS,
 								Value: "node-b.example.com",
@@ -379,7 +379,7 @@ func TestCommandMarshalUnmarshal_Integration(t *testing.T) {
 						},
 						{
 							NodeID: "node-c",
-							IP:     "192.168.1.3:8080",
+							Host:   "192.168.1.3:8080",
 							Identity: TLSIdentity{
 								Kind:  IdentityDNS,
 								Value: "node-c.example.com",
@@ -387,7 +387,7 @@ func TestCommandMarshalUnmarshal_Integration(t *testing.T) {
 						},
 						{
 							NodeID: "node-d",
-							IP:     "192.168.1.4:8080",
+							Host:   "192.168.1.4:8080",
 							Identity: TLSIdentity{
 								Kind:  IdentityDNS,
 								Value: "node-d.example.com",
@@ -395,7 +395,7 @@ func TestCommandMarshalUnmarshal_Integration(t *testing.T) {
 						},
 						{
 							NodeID: "node-e",
-							IP:     "192.168.1.5:8080",
+							Host:   "192.168.1.5:8080",
 							Identity: TLSIdentity{
 								Kind:  IdentityDNS,
 								Value: "node-e.example.com",
@@ -810,7 +810,7 @@ func equalPeerInfos(a, b []PeerInfo) bool {
 		if a[i].NodeID != b[i].NodeID {
 			return false
 		}
-		if a[i].IP != b[i].IP {
+		if a[i].Host != b[i].Host {
 			return false
 		}
 		if a[i].Identity.Kind != b[i].Identity.Kind {

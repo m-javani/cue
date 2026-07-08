@@ -35,8 +35,8 @@ func TestNewServiceDiscovery(t *testing.T) {
 		{
 			name: "successful static discovery",
 			seed: []model.PeerInfo{
-				{NodeID: "node1", IP: "127.0.0.1"},
-				{NodeID: "node2", IP: "127.0.0.1"},
+				{NodeID: "node1", Host: "127.0.0.1"},
+				{NodeID: "node2", Host: "127.0.0.1"},
 			},
 			selfNodeID:        "node1",
 			discoveryKind:     internal.DiscoveryKindStatic,
@@ -47,7 +47,7 @@ func TestNewServiceDiscovery(t *testing.T) {
 		{
 			name: "self node not in seed - gets added",
 			seed: []model.PeerInfo{
-				{NodeID: "node2", IP: "127.0.0.1"},
+				{NodeID: "node2", Host: "127.0.0.1"},
 			},
 			selfNodeID:        "node1",
 			discoveryKind:     internal.DiscoveryKindStatic,
@@ -58,7 +58,7 @@ func TestNewServiceDiscovery(t *testing.T) {
 		{
 			name: "http discovery missing endpoint",
 			seed: []model.PeerInfo{
-				{NodeID: "node1", IP: "127.0.0.1"},
+				{NodeID: "node1", Host: "127.0.0.1"},
 			},
 			selfNodeID:        "node1",
 			discoveryKind:     internal.DiscoveryKindHttp,
@@ -102,9 +102,9 @@ func TestServiceDiscovery_Lookup(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
-		{NodeID: "node3", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
+		{NodeID: "node3", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
@@ -142,8 +142,8 @@ func TestServiceDiscovery_ListPeers(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
@@ -153,7 +153,7 @@ func TestServiceDiscovery_ListPeers(t *testing.T) {
 	assert.Len(t, peers, 2)
 
 	// Verify it's a copy
-	peers[0] = model.PeerInfo{NodeID: "modified", IP: "127.0.0.1"}
+	peers[0] = model.PeerInfo{NodeID: "modified", Host: "127.0.0.1"}
 	newPeers := sd.ListPeers()
 	assert.NotEqual(t, peers[0], newPeers[0])
 }
@@ -162,8 +162,8 @@ func TestServiceDiscovery_ListPeersRaftIDs(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
@@ -182,8 +182,8 @@ func TestServiceDiscovery_GetNodeIDFromRaftID(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
@@ -203,8 +203,8 @@ func TestServiceDiscovery_GetRaftIDFromNode(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
@@ -223,16 +223,16 @@ func TestServiceDiscovery_UpdatePeers(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
 	require.NoError(t, err)
 
 	newPeers := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
-		{NodeID: "node3", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
+		{NodeID: "node3", Host: "127.0.0.1"},
 	}
 
 	sd.UpdatePeers(newPeers)
@@ -247,16 +247,16 @@ func TestServiceDiscovery_MergePeers(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
 	require.NoError(t, err)
 
 	newPeers := []model.PeerInfo{
-		{NodeID: "node3", IP: "127.0.0.1"},
-		{NodeID: "node4", IP: "127.0.0.1"},
+		{NodeID: "node3", Host: "127.0.0.1"},
+		{NodeID: "node4", Host: "127.0.0.1"},
 	}
 
 	sd.MergePeers(newPeers)
@@ -264,7 +264,7 @@ func TestServiceDiscovery_MergePeers(t *testing.T) {
 	assert.Len(t, peers, 4)
 
 	// Try merging duplicate
-	sd.MergePeers([]model.PeerInfo{{NodeID: "node1", IP: "127.0.0.1"}})
+	sd.MergePeers([]model.PeerInfo{{NodeID: "node1", Host: "127.0.0.1"}})
 	peers = sd.ListPeers()
 	assert.Len(t, peers, 4) // Should stay the same
 
@@ -276,8 +276,8 @@ func TestServiceDiscovery_ValidateConsistency(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
@@ -287,7 +287,7 @@ func TestServiceDiscovery_ValidateConsistency(t *testing.T) {
 
 	// Corrupt internal state to test inconsistency
 	sd.peers.Lock()
-	sd.peersList = []model.PeerInfo{{NodeID: "node3", IP: "127.0.0.1"}}
+	sd.peersList = []model.PeerInfo{{NodeID: "node3", Host: "127.0.0.1"}}
 	sd.peers.Unlock()
 
 	assert.False(t, sd.ValidateConsistency())
@@ -308,27 +308,27 @@ func TestServiceDiscovery_HTTPDiscovery(t *testing.T) {
 			response: httpPeersResponse{
 				Version: 1,
 				Peers: []model.PeerInfo{
-					{NodeID: "node1", IP: "127.0.0.1"},
-					{NodeID: "node2", IP: "127.0.0.1"},
+					{NodeID: "node1", Host: "127.0.0.1"},
+					{NodeID: "node2", Host: "127.0.0.1"},
 				},
 			},
 			statusCode: http.StatusOK,
 			expectedPeers: []model.PeerInfo{
-				{NodeID: "node1", IP: "127.0.0.1"},
-				{NodeID: "node2", IP: "127.0.0.1"},
+				{NodeID: "node1", Host: "127.0.0.1"},
+				{NodeID: "node2", Host: "127.0.0.1"},
 			},
 			expectError: false,
 		},
 		{
 			name: "bare array response",
 			response: []model.PeerInfo{
-				{NodeID: "node1", IP: "127.0.0.1"},
-				{NodeID: "node2", IP: "127.0.0.1"},
+				{NodeID: "node1", Host: "127.0.0.1"},
+				{NodeID: "node2", Host: "127.0.0.1"},
 			},
 			statusCode: http.StatusOK,
 			expectedPeers: []model.PeerInfo{
-				{NodeID: "node1", IP: "127.0.0.1"},
-				{NodeID: "node2", IP: "127.0.0.1"},
+				{NodeID: "node1", Host: "127.0.0.1"},
+				{NodeID: "node2", Host: "127.0.0.1"},
 			},
 			expectError: false,
 		},
@@ -337,7 +337,7 @@ func TestServiceDiscovery_HTTPDiscovery(t *testing.T) {
 			response: httpPeersResponse{
 				Version: 2,
 				Peers: []model.PeerInfo{
-					{NodeID: "node1", IP: "127.0.0.1"},
+					{NodeID: "node1", Host: "127.0.0.1"},
 				},
 			},
 			statusCode:  http.StatusOK,
@@ -369,7 +369,7 @@ func TestServiceDiscovery_HTTPDiscovery(t *testing.T) {
 			}))
 			defer server.Close()
 
-			seed := []model.PeerInfo{{NodeID: "self", IP: "127.0.0.1"}}
+			seed := []model.PeerInfo{{NodeID: "self", Host: "127.0.0.1"}}
 			sd, err := NewServiceDiscovery(
 				logger,
 				seed,
@@ -419,7 +419,7 @@ func TestServiceDiscovery_Run(t *testing.T) {
 			Peers: []model.PeerInfo{
 				{
 					NodeID: "self",
-					IP:     "127.0.0.1",
+					Host:   "127.0.0.1",
 					Identity: model.TLSIdentity{
 						Kind:  model.IdentityIP,
 						Value: "127.0.0.1",
@@ -427,7 +427,7 @@ func TestServiceDiscovery_Run(t *testing.T) {
 				},
 				{
 					NodeID: fmt.Sprintf("node-%d", callCount),
-					IP:     "127.0.0.1",
+					Host:   "127.0.0.1",
 					Identity: model.TLSIdentity{
 						Kind:  model.IdentityIP,
 						Value: "127.0.0.1",
@@ -442,7 +442,7 @@ func TestServiceDiscovery_Run(t *testing.T) {
 	seed := []model.PeerInfo{
 		{
 			NodeID: "self",
-			IP:     "127.0.0.1",
+			Host:   "127.0.0.1",
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityIP,
 				Value: "127.0.0.1",
@@ -495,7 +495,7 @@ func TestServiceDiscovery_Run_Static(t *testing.T) {
 	}))
 	defer server.Close()
 
-	seed := []model.PeerInfo{{NodeID: "node1", IP: "127.0.0.1"}}
+	seed := []model.PeerInfo{{NodeID: "node1", Host: "127.0.0.1"}}
 	sd, err := NewServiceDiscovery(
 		logger,
 		seed,
@@ -522,8 +522,8 @@ func TestServiceDiscovery_ConcurrentAccess(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
 	seed := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
 	}
 
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
@@ -550,7 +550,7 @@ func TestServiceDiscovery_ConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			sd.UpdatePeers([]model.PeerInfo{
-				{NodeID: fmt.Sprintf("node%d", i), IP: "127.0.0.1"},
+				{NodeID: fmt.Sprintf("node%d", i), Host: "127.0.0.1"},
 			})
 		}(i)
 	}
@@ -569,14 +569,14 @@ func TestServiceDiscovery_HTTPDiscovery_ContextCancellation(t *testing.T) {
 		response := httpPeersResponse{
 			Version: 1,
 			Peers: []model.PeerInfo{
-				{NodeID: "node1", IP: "127.0.0.1"},
+				{NodeID: "node1", Host: "127.0.0.1"},
 			},
 		}
 		json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
-	seed := []model.PeerInfo{{NodeID: "self", IP: "127.0.0.1"}}
+	seed := []model.PeerInfo{{NodeID: "self", Host: "127.0.0.1"}}
 	sd, err := NewServiceDiscovery(
 		logger,
 		seed,
@@ -598,14 +598,14 @@ func TestServiceDiscovery_HTTPDiscovery_ContextCancellation(t *testing.T) {
 func TestServiceDiscovery_UpdateInternalState(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 
-	seed := []model.PeerInfo{{NodeID: "node1", IP: "127.0.0.1"}}
+	seed := []model.PeerInfo{{NodeID: "node1", Host: "127.0.0.1"}}
 	sd, err := NewServiceDiscovery(logger, seed, "node1", internal.DiscoveryKindStatic, "", 30*time.Second)
 	require.NoError(t, err)
 
 	newPeers := []model.PeerInfo{
-		{NodeID: "node1", IP: "127.0.0.1"},
-		{NodeID: "node2", IP: "127.0.0.1"},
-		{NodeID: "node3", IP: "127.0.0.1"},
+		{NodeID: "node1", Host: "127.0.0.1"},
+		{NodeID: "node2", Host: "127.0.0.1"},
+		{NodeID: "node3", Host: "127.0.0.1"},
 	}
 
 	sd.updateInternalState(newPeers)
@@ -643,25 +643,29 @@ func TestLoadDiscoveryFile(t *testing.T) {
 			content: `
 nodes:
   - node_id: node1
-    ip: 192.168.1.10
+    host: 192.168.1.10
     identity:
       kind: dns
       value: node1.example.com
   - node_id: node2
-    ip: 192.168.1.11
+    host: 192.168.1.11
     identity:
       kind: ip
       value: 192.168.1.11
   - node_id: node3
-    ip: 192.168.1.12
     identity:
       kind: spiffe
       value: spiffe://example.org/node3
+  - node_id: node4
+    host: 192.168.1.12
+    identity:
+      kind: dns
+      value: node4.example.com
 `,
 			expectedPeers: []model.PeerInfo{
 				{
 					NodeID: "node1",
-					IP:     "192.168.1.10",
+					Host:   "192.168.1.10",
 					Identity: model.TLSIdentity{
 						Kind:  model.IdentityDNS,
 						Value: "node1.example.com",
@@ -669,7 +673,7 @@ nodes:
 				},
 				{
 					NodeID: "node2",
-					IP:     "192.168.1.11",
+					Host:   "192.168.1.11",
 					Identity: model.TLSIdentity{
 						Kind:  model.IdentityIP,
 						Value: "192.168.1.11",
@@ -677,10 +681,18 @@ nodes:
 				},
 				{
 					NodeID: "node3",
-					IP:     "192.168.1.12",
+					Host:   "", // Empty host - will fallback to NodeID
 					Identity: model.TLSIdentity{
 						Kind:  model.IdentitySPIFFE,
 						Value: "spiffe://example.org/node3",
+					},
+				},
+				{
+					NodeID: "node4",
+					Host:   "192.168.1.12",
+					Identity: model.TLSIdentity{
+						Kind:  model.IdentityDNS,
+						Value: "node4.example.com",
 					},
 				},
 			},
@@ -700,12 +712,12 @@ nodes: []
 			content: `
 nodes:
   - node_id: node1
-    ip: 192.168.1.10
+    host: 192.168.1.10
     identity:
       kind: dns
       value: node1.example.com
   - node_id: node1
-    ip: 192.168.1.11
+    host: 192.168.1.11
     identity:
       kind: ip
       value: 192.168.1.11
@@ -717,7 +729,7 @@ nodes:
 			name: "missing required node_id",
 			content: `
 nodes:
-  - ip: 192.168.1.10
+  - host: 192.168.1.10
     identity:
       kind: dns
       value: node1.example.com
@@ -726,36 +738,11 @@ nodes:
 			errorContains: "node_id is required",
 		},
 		{
-			name: "missing required ip",
-			content: `
-nodes:
-  - node_id: node1
-    identity:
-      kind: dns
-      value: node1.example.com
-`,
-			expectError:   true,
-			errorContains: "ip is required",
-		},
-		{
-			name: "invalid ip address",
-			content: `
-nodes:
-  - node_id: node1
-    ip: invalid-ip
-    identity:
-      kind: dns
-      value: node1.example.com
-`,
-			expectError:   true,
-			errorContains: "invalid IP address",
-		},
-		{
 			name: "invalid identity kind",
 			content: `
 nodes:
   - node_id: node1
-    ip: 192.168.1.10
+    host: 192.168.1.10
     identity:
       kind: invalid
       value: node1.example.com
@@ -768,7 +755,7 @@ nodes:
 			content: `
 nodes:
   - node_id: node1
-    ip: 192.168.1.10
+    host: 192.168.1.10
     identity:
       kind: dns
       value: ""
@@ -781,7 +768,7 @@ nodes:
 			content: `
 nodes:
   - node_id: node1
-    ip: 192.168.1.10
+    host: 192.168.1.10
     identity:
       kind: spiffe
       value: example.org/node1

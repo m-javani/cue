@@ -194,7 +194,7 @@ func (tc *TestCluster) getOrCreateMapping(nodeID string) *nodeMapping {
 		quicPort:   port,
 		peerInfo: model.PeerInfo{
 			NodeID: internalID,
-			IP:     "127.0.0.1",
+			Host:   "127.0.0.1",
 			Identity: model.TLSIdentity{
 				Kind:  model.IdentityDNS,
 				Value: internalID + ".localhost",
