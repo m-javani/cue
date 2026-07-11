@@ -149,15 +149,16 @@ func NewCRaft(
 ) (*CRaft, error) {
 
 	raftConfig := &raft.Config{
-		ID:              cfg.ID,
-		ElectionTick:    cfg.ElectionTick,
-		HeartbeatTick:   cfg.HeartbeatTick,
-		Storage:         storage,
-		MaxSizePerMsg:   cfg.MaxSizePerMsg,
-		MaxInflightMsgs: cfg.MaxInflightMsgs,
-		PreVote:         true,
-		CheckQuorum:     true,
-		Logger:          utils.NewRaftZapLogger(logger),
+		ID:                        cfg.ID,
+		ElectionTick:              cfg.ElectionTick,
+		HeartbeatTick:             cfg.HeartbeatTick,
+		Storage:                   storage,
+		MaxSizePerMsg:             cfg.MaxSizePerMsg,
+		MaxInflightMsgs:           cfg.MaxInflightMsgs,
+		PreVote:                   true,
+		CheckQuorum:               true,
+		DisableProposalForwarding: true,
+		Logger:                    utils.NewRaftZapLogger(logger),
 	}
 
 	// Create RawNode (gives you the Ready() API )
