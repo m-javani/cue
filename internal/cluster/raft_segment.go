@@ -28,6 +28,7 @@ import (
 	"github.com/m-javani/cue/internal/utils"
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -462,7 +463,7 @@ func (sw *SegmentedWAL) rotate() error {
 // RECOVERY (callback-based)
 // ============================================
 
-func (sw *SegmentedWAL) Recover(snapshotIndex uint64, fn func(raftpb.Entry) error) error {
+func (sw *SegmentedWAL) Recover(snapshotIndex uint64, fn func(*raftpb.Entry) error) error {
 	sw.mu.RLock()
 	defer sw.mu.RUnlock()
 
@@ -484,7 +485,7 @@ func (sw *SegmentedWAL) Recover(snapshotIndex uint64, fn func(raftpb.Entry) erro
 				f.Close()
 				return fmt.Errorf("corrupt entry in %s: %w", seg.path, err)
 			}
-			if entry.Index > snapshotIndex {
+			if entry.GetIndex() > snapshotIndex {
 				if err := fn(entry); err != nil {
 					_ = f.Close()
 					return err
@@ -585,7 +586,7 @@ func (sw *SegmentedWAL) NewReader(fromIndex uint64) (*Reader, error) {
 	return r, nil
 }
 
-func (r *Reader) ReadEntry() (raftpb.Entry, error) {
+func (r *Reader) ReadEntry() (*raftpb.Entry, error) {
 	for {
 		entry, err := r.reader.ReadEntry()
 		if err == nil {
@@ -598,19 +599,19 @@ func (r *Reader) ReadEntry() (raftpb.Entry, error) {
 				_ = r.file.Close()
 				r.file = nil
 			}
-			return raftpb.Entry{}, io.EOF
+			return &raftpb.Entry{}, io.EOF
 		}
 
 		// Close previous segment before opening next one
 		if r.file != nil {
 			if err := r.file.Close(); err != nil {
-				return raftpb.Entry{}, err
+				return &raftpb.Entry{}, err
 			}
 		}
 
 		f, err := os.Open(r.segments[r.segIdx].path)
 		if err != nil {
-			return raftpb.Entry{}, err
+			return &raftpb.Entry{}, err
 		}
 
 		r.file = f
@@ -720,27 +721,27 @@ func (r *WALReader) ReadHeader() (uint64, uint64, error) {
 	return index, total, nil
 }
 
-func (r *WALReader) ReadEntry() (raftpb.Entry, error) {
+func (r *WALReader) ReadEntry() (*raftpb.Entry, error) {
 	idx, totalSize, err := r.ReadHeader()
 	if err != nil {
 		if err == io.EOF {
-			return raftpb.Entry{}, io.EOF
+			return &raftpb.Entry{}, io.EOF
 		}
-		return raftpb.Entry{}, err
+		return &raftpb.Entry{}, err
 	}
 
 	dataSize := int64(totalSize) - 16
 	data := make([]byte, dataSize)
 	if _, err := io.ReadFull(r.file, data); err != nil {
-		return raftpb.Entry{}, err
+		return &raftpb.Entry{}, err
 	}
 
-	var entry raftpb.Entry
-	if err := entry.Unmarshal(data); err != nil {
-		return raftpb.Entry{}, err
+	entry := &raftpb.Entry{}
+	if err := proto.Unmarshal(data, entry); err != nil {
+		return &raftpb.Entry{}, err
 	}
-	if entry.Index != idx {
-		return raftpb.Entry{}, fmt.Errorf("index mismatch")
+	if entry.GetIndex() != idx {
+		return &raftpb.Entry{}, fmt.Errorf("index mismatch")
 	}
 	return entry, nil
 }

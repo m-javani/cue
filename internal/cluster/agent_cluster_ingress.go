@@ -19,6 +19,7 @@ import (
 
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/m-javani/cue/internal"
 	"github.com/m-javani/cue/internal/model"
@@ -70,8 +71,8 @@ func (a *ClusterAgent) ProcessRequest(request *ClusterRequest, nodeID string) (*
 			return nil, internal.ErrInvalidRaftMessage
 		}
 
-		var msg raftpb.Message
-		if err := msg.Unmarshal(request.RaftMessage.Data); err != nil {
+		msg := &raftpb.Message{}
+		if err := proto.Unmarshal(request.RaftMessage.Data, msg); err != nil {
 			return nil, internal.ErrInvalidRaftMessage
 		}
 

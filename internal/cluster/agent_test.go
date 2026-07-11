@@ -880,7 +880,7 @@ func TestReplication(t *testing.T) {
 	}
 
 	// Send 10 commands
-	numCommands := 2
+	numCommands := 100
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

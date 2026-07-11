@@ -18,10 +18,11 @@ import (
 	"encoding/binary"
 
 	"go.etcd.io/raft/v3/raftpb"
+	"google.golang.org/protobuf/proto"
 )
 
-func encodeBufferedEntry(entry raftpb.Entry) (BufferedEntry, error) {
-	data, err := entry.Marshal()
+func encodeBufferedEntry(entry *raftpb.Entry) (BufferedEntry, error) {
+	data, err := proto.Marshal(entry)
 	if err != nil {
 		return BufferedEntry{}, err
 	}
@@ -30,14 +31,14 @@ func encodeBufferedEntry(entry raftpb.Entry) (BufferedEntry, error) {
 
 	var header [16]byte
 	binary.LittleEndian.PutUint64(header[0:8], totalSize)
-	binary.LittleEndian.PutUint64(header[8:16], entry.Index)
+	binary.LittleEndian.PutUint64(header[8:16], entry.GetIndex())
 
 	buf := make([]byte, 16+len(data))
 	copy(buf[:16], header[:])
 	copy(buf[16:], data)
 
 	return BufferedEntry{
-		Index: entry.Index,
+		Index: entry.GetIndex(),
 		Data:  buf,
 	}, nil
 }

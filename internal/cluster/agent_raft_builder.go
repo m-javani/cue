@@ -20,6 +20,7 @@ import (
 
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 // buildAndStartRaftNode creates and starts the Raft node
@@ -41,7 +42,7 @@ func (a *ClusterAgent) buildAndStartRaftNode(storage *RaftStorage) error {
 			RaftTickMs:      a.raftTickMs,
 			ElectionTick:    a.raftElectionTick,
 			HeartbeatTick:   a.raftHeartbeatTick,
-			MaxSizePerMsg:   8 * 1024,
+			MaxSizePerMsg:   4 * 1024 * 1024,
 			MaxInflightMsgs: 2048,
 		},
 		storage, // Pass storage ownership to Raft
@@ -127,15 +128,15 @@ func (a *ClusterAgent) ensureDummySnapshot(storage *RaftStorage) error {
 	}
 
 	// Create dummy snapshot
-	confState := raftpb.ConfState{Voters: voterRaftIDs}
-	Metadata := raftpb.SnapshotMetadata{
-		Index:     1,
-		Term:      1,
+	confState := &raftpb.ConfState{Voters: voterRaftIDs}
+	metadata := &raftpb.SnapshotMetadata{
+		Index:     proto.Uint64(1),
+		Term:      proto.Uint64(1),
 		ConfState: confState,
 	}
 	a.currentTerm.Store(1)
 
-	return storage.InstallSnapshot(Metadata)
+	return storage.InstallSnapshot(metadata)
 }
 
 // containsRaftID checks if a slice contains a raft ID

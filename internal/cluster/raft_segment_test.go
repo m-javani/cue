@@ -28,6 +28,7 @@ import (
 
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type TestWAL struct {
@@ -74,7 +75,7 @@ func NewTestWALSmall(t *testing.T) *TestWAL {
 // ============================================
 
 // MustAppend appends entries and fails test on error
-func (tw *TestWAL) MustAppend(entries ...raftpb.Entry) {
+func (tw *TestWAL) MustAppend(entries ...*raftpb.Entry) {
 	batch := make([]BufferedEntry, len(entries))
 
 	for i, e := range entries {
@@ -96,7 +97,7 @@ func (tw *TestWAL) MustAppendRange(first, last uint64) {
 		tw.t.Fatalf("invalid range %d..%d (first > last)", first, last)
 	}
 
-	entries := make([]raftpb.Entry, 0, last-first+1)
+	entries := make([]*raftpb.Entry, 0, last-first+1)
 	for i := first; i <= last; i++ {
 		entries = append(entries, MakeEntry(i, fmt.Sprintf("%d", i)))
 	}
@@ -104,7 +105,7 @@ func (tw *TestWAL) MustAppendRange(first, last uint64) {
 }
 
 // NextEntry returns an entry with the next available index
-func (tw *TestWAL) NextEntry(data string) raftpb.Entry {
+func (tw *TestWAL) NextEntry(data string) *raftpb.Entry {
 	return MakeEntry(tw.nextIndex, data)
 }
 
@@ -135,8 +136,8 @@ func createTestFile(t *testing.T, data []byte) *os.File {
 // ============================================
 // READ HELPERS
 // ============================================
-func (tw *TestWAL) readAllFromReader(r *Reader) []raftpb.Entry {
-	var entries []raftpb.Entry
+func (tw *TestWAL) readAllFromReader(r *Reader) []*raftpb.Entry {
+	var entries []*raftpb.Entry
 	for {
 		e, err := r.ReadEntry()
 		if err == io.EOF {
@@ -151,9 +152,9 @@ func (tw *TestWAL) readAllFromReader(r *Reader) []raftpb.Entry {
 }
 
 // MustReadAll reads all entries from index 1 and fails on error
-func (tw *TestWAL) MustReadAll() []raftpb.Entry {
-	var entries []raftpb.Entry
-	err := tw.Recover(0, func(e raftpb.Entry) error {
+func (tw *TestWAL) MustReadAll() []*raftpb.Entry {
+	var entries []*raftpb.Entry
+	err := tw.Recover(0, func(e *raftpb.Entry) error {
 		entries = append(entries, e)
 		return nil
 	})
@@ -164,14 +165,14 @@ func (tw *TestWAL) MustReadAll() []raftpb.Entry {
 }
 
 // MustReadFrom reads entries from given index and fails on error
-func (tw *TestWAL) MustReadFrom(from uint64) []raftpb.Entry {
+func (tw *TestWAL) MustReadFrom(from uint64) []*raftpb.Entry {
 	r, err := tw.NewReader(from)
 	if err != nil {
 		tw.t.Fatalf("new reader: %v", err)
 	}
 	defer func() { _ = r.Close() }()
 
-	var entries []raftpb.Entry
+	var entries []*raftpb.Entry
 	for {
 		e, err := r.ReadEntry()
 		if err == io.EOF {
@@ -334,10 +335,10 @@ func (tw *TestWAL) GetTempFiles() []string {
 // ============================================
 
 // MakeEntry creates a test entry with index and data
-func MakeEntry(index uint64, data string) raftpb.Entry {
-	return raftpb.Entry{
-		Index: index,
-		Term:  1,
+func MakeEntry(index uint64, data string) *raftpb.Entry {
+	return &raftpb.Entry{
+		Index: proto.Uint64(index),
+		Term:  proto.Uint64(1),
 		Data:  []byte(data),
 	}
 }
@@ -345,8 +346,8 @@ func MakeEntry(index uint64, data string) raftpb.Entry {
 // MakeEntryWithTerm creates a test entry with specific term
 func MakeEntryWithTerm(term, index uint64, data string) raftpb.Entry {
 	return raftpb.Entry{
-		Index: index,
-		Term:  term,
+		Index: proto.Uint64(index),
+		Term:  proto.Uint64(term),
 		Data:  []byte(data),
 	}
 }
@@ -356,10 +357,10 @@ func MakeEntryWithTerm(term, index uint64, data string) raftpb.Entry {
 // ============================================
 
 // EntriesIndices returns indices of entries
-func EntriesIndices(entries []raftpb.Entry) []uint64 {
+func EntriesIndices(entries []*raftpb.Entry) []uint64 {
 	indices := make([]uint64, len(entries))
 	for i, e := range entries {
-		indices[i] = e.Index
+		indices[i] = e.GetIndex()
 	}
 	return indices
 }
@@ -692,15 +693,15 @@ func TestAppendBatch_WritesEntries(t *testing.T) {
 		if len(entries) != 1 {
 			t.Fatalf("expected 1 entry, got %d", len(entries))
 		}
-		if entries[0].Index != 1 {
-			t.Fatalf("entry index = %d, want 1", entries[0].Index)
+		if entries[0].GetIndex() != 1 {
+			t.Fatalf("entry index = %d, want 1", entries[0].GetIndex())
 		}
 	})
 
 	t.Run("appends multiple entries", func(t *testing.T) {
 		tw := NewTestWAL(t)
 
-		entries := []raftpb.Entry{
+		entries := []*raftpb.Entry{
 			MakeEntry(1, "first"),
 			MakeEntry(2, "second"),
 			MakeEntry(3, "third"),
@@ -720,8 +721,8 @@ func TestAppendBatch_WritesEntries(t *testing.T) {
 
 		for i, entry := range read {
 			expectedIdx := uint64(i + 1)
-			if entry.Index != expectedIdx {
-				t.Fatalf("entry %d index = %d, want %d", i, entry.Index, expectedIdx)
+			if entry.GetIndex() != expectedIdx {
+				t.Fatalf("entry %d index = %d, want %d", i, entry.GetIndex(), expectedIdx)
 			}
 		}
 	})
@@ -739,8 +740,8 @@ func TestAppendBatch_WritesEntries(t *testing.T) {
 		}
 
 		for i := 0; i < 3; i++ {
-			if entries[i].Index != uint64(i+1) {
-				t.Fatalf("entry %d index = %d, want %d", i, entries[i].Index, i+1)
+			if entries[i].GetIndex() != uint64(i+1) {
+				t.Fatalf("entry %d index = %d, want %d", i, entries[i].GetIndex(), i+1)
 			}
 		}
 	})
@@ -769,7 +770,7 @@ func TestAppendBatch_WritesEntries(t *testing.T) {
 		}
 
 		// Append more entries
-		newEntries := []raftpb.Entry{
+		newEntries := []*raftpb.Entry{
 			MakeEntry(11, "eleven"),
 			MakeEntry(12, "twelve"),
 			MakeEntry(13, "thirteen"),
@@ -791,8 +792,8 @@ func TestAppendBatch_WritesEntries(t *testing.T) {
 
 		// Verify last entry is 15
 		last := entries[len(entries)-1]
-		if last.Index != 15 {
-			t.Fatalf("last entry index = %d, want 15", last.Index)
+		if last.GetIndex() != 15 {
+			t.Fatalf("last entry index = %d, want 15", last.GetIndex())
 		}
 	})
 
@@ -834,7 +835,7 @@ func TestAppendBatch_WritesEntries(t *testing.T) {
 		tw := NewTestWAL(t)
 
 		// Append 1000 entries in one batch
-		entries := make([]raftpb.Entry, 1000)
+		entries := make([]*raftpb.Entry, 1000)
 		for i := 0; i < 1000; i++ {
 			entries[i] = MakeEntry(uint64(i+1), "data")
 		}
@@ -855,9 +856,9 @@ func TestAppendBatch_WritesEntries(t *testing.T) {
 		// Spot check some indices
 		checkpoints := []uint64{1, 100, 500, 999, 1000}
 		for _, idx := range checkpoints {
-			if read[idx-1].Index != idx {
+			if read[idx-1].GetIndex() != idx {
 				t.Fatalf("entry at position %d has index %d, want %d",
-					idx-1, read[idx-1].Index, idx)
+					idx-1, read[idx-1].GetIndex(), idx)
 			}
 		}
 	})
@@ -883,8 +884,8 @@ func TestAppendBatch_WritesEntries(t *testing.T) {
 
 		expected := []uint64{1, 5, 10}
 		for i, idx := range expected {
-			if entries[i].Index != idx {
-				t.Fatalf("entry %d index = %d, want %d", i, entries[i].Index, idx)
+			if entries[i].GetIndex() != idx {
+				t.Fatalf("entry %d index = %d, want %d", i, entries[i].GetIndex(), idx)
 			}
 		}
 	})
@@ -944,7 +945,7 @@ func TestRotate_SealsAndCreatesNewSegment(t *testing.T) {
 
 	// Verify data
 	entries := tw.MustReadAll()
-	lastIdx := entries[len(entries)-1].Index
+	lastIdx := entries[len(entries)-1].GetIndex()
 	if lastIdx != sealedEnd+1 { // the entry that triggered rotation
 		t.Fatalf("last written entry = %d, want %d", lastIdx, sealedEnd+1)
 	}
@@ -984,8 +985,8 @@ func TestRecover_ReadsAllEntries(t *testing.T) {
 
 		// Verify sequential order
 		for i, e := range entries {
-			if e.Index != uint64(i+1) {
-				t.Fatalf("entry at position %d has index %d, want %d", i, e.Index, i+1)
+			if e.GetIndex() != uint64(i+1) {
+				t.Fatalf("entry at position %d has index %d, want %d", i, e.GetIndex(), i+1)
 			}
 		}
 
@@ -996,8 +997,8 @@ func TestRecover_ReadsAllEntries(t *testing.T) {
 		tw := NewTestWAL(t)
 		tw.MustAppendRange(1, 200)
 
-		var recovered []raftpb.Entry
-		err := tw.Recover(50, func(e raftpb.Entry) error {
+		var recovered []*raftpb.Entry
+		err := tw.Recover(50, func(e *raftpb.Entry) error {
 			recovered = append(recovered, e)
 			return nil
 		})
@@ -1008,15 +1009,15 @@ func TestRecover_ReadsAllEntries(t *testing.T) {
 		if len(recovered) != 150 {
 			t.Fatalf("expected 150 entries (51-200), got %d", len(recovered))
 		}
-		if recovered[0].Index != 51 {
-			t.Fatalf("first recovered should be 51, got %d", recovered[0].Index)
+		if recovered[0].GetIndex() != 51 {
+			t.Fatalf("first recovered should be 51, got %d", recovered[0].GetIndex())
 		}
 	})
 
 	t.Run("handles empty WAL gracefully", func(t *testing.T) {
 		tw := NewTestWAL(t)
 		var count int
-		err := tw.Recover(0, func(e raftpb.Entry) error {
+		err := tw.Recover(0, func(e *raftpb.Entry) error {
 			count++
 			return nil
 		})
@@ -1033,7 +1034,7 @@ func TestRecover_ReadsAllEntries(t *testing.T) {
 		tw.MustAppendRange(1, 50)
 
 		var count int
-		err := tw.Recover(100, func(e raftpb.Entry) error {
+		err := tw.Recover(100, func(e *raftpb.Entry) error {
 			count++
 			return nil
 		})
@@ -1104,7 +1105,7 @@ func TestReader_StreamsCorrectly(t *testing.T) {
 		}
 		defer r.Close()
 
-		entries := make([]raftpb.Entry, 0, 200)
+		entries := make([]*raftpb.Entry, 0, 200)
 		for {
 			e, err := r.ReadEntry()
 			if err == io.EOF {
@@ -1119,10 +1120,10 @@ func TestReader_StreamsCorrectly(t *testing.T) {
 		if len(entries) != 151 { // 150 to 300 inclusive
 			t.Fatalf("expected 151 entries from 150, got %d", len(entries))
 		}
-		if entries[0].Index != 150 {
-			t.Fatalf("first entry should be 150, got %d", entries[0].Index)
+		if entries[0].GetIndex() != 150 {
+			t.Fatalf("first entry should be 150, got %d", entries[0].GetIndex())
 		}
-		if entries[len(entries)-1].Index != 300 {
+		if entries[len(entries)-1].GetIndex() != 300 {
 			t.Fatalf("last entry should be 300")
 		}
 	})
@@ -1144,8 +1145,8 @@ func TestReader_StreamsCorrectly(t *testing.T) {
 
 		entries := tw.readAllFromReader(r) // helper defined below
 
-		if entries[0].Index != startIdx {
-			t.Fatalf("expected start at %d, got %d", startIdx, entries[0].Index)
+		if entries[0].GetIndex() != startIdx {
+			t.Fatalf("expected start at %d, got %d", startIdx, entries[0].GetIndex())
 		}
 
 		// Should have crossed into second segment
@@ -1217,7 +1218,7 @@ func TestReader_StreamsCorrectly(t *testing.T) {
 		if len(entries) != 51 {
 			t.Fatalf("expected 51 entries starting from new segment, got %d", len(entries))
 		}
-		if entries[0].Index != firstOfNewSegment {
+		if entries[0].GetIndex() != firstOfNewSegment {
 			t.Fatalf("wrong starting index")
 		}
 	})
@@ -1262,8 +1263,8 @@ func TestWALReader_ReadsEntries(t *testing.T) {
 			t.Fatalf("failed to read valid entry: %v", err)
 		}
 
-		if readEntry.Index != 42 {
-			t.Fatalf("index = %d, want 42", readEntry.Index)
+		if readEntry.GetIndex() != 42 {
+			t.Fatalf("index = %d, want 42", readEntry.GetIndex())
 		}
 		if string(readEntry.Data) != "hello world from WALReader" {
 			t.Fatalf("data mismatch: got %q", string(readEntry.Data))
@@ -1360,8 +1361,8 @@ func TestTruncate_RemovesOldSegments(t *testing.T) {
 		tw.MustHaveSealedCount(0)
 
 		entries := tw.MustReadAll()
-		if len(entries) == 0 || entries[0].Index != lastInSealed+1 {
-			t.Fatalf("expected first remaining entry %d, got %d", lastInSealed+1, entries[0].Index)
+		if len(entries) == 0 || entries[0].GetIndex() != lastInSealed+1 {
+			t.Fatalf("expected first remaining entry %d, got %d", lastInSealed+1, entries[0].GetIndex())
 		}
 	})
 
@@ -1388,8 +1389,8 @@ func TestTruncate_RemovesOldSegments(t *testing.T) {
 		// Because there is no sealed segment yet, and we only drop whole segments,
 		// the active segment is kept fully. So first entry remains 1.
 		entries := tw.MustReadAll()
-		if len(entries) == 0 || entries[0].Index != 1 {
-			t.Fatalf("expected first entry to remain 1 (active not truncated in place), got %d", entries[0].Index)
+		if len(entries) == 0 || entries[0].GetIndex() != 1 {
+			t.Fatalf("expected first entry to remain 1 (active not truncated in place), got %d", entries[0].GetIndex())
 		}
 
 		// nextIndex should still point after the last written entry
@@ -1542,11 +1543,11 @@ func TestIntegration_FullLifecycle(t *testing.T) {
 	}
 
 	// Verify first and last entries
-	if reopened[0].Index != 1 {
-		t.Fatalf("first entry after reopen should be 1, got %d", reopened[0].Index)
+	if reopened[0].GetIndex() != 1 {
+		t.Fatalf("first entry after reopen should be 1, got %d", reopened[0].GetIndex())
 	}
-	if reopened[len(reopened)-1].Index != uint64(totalEntries) {
-		t.Fatalf("last entry after reopen should be %d, got %d", totalEntries, reopened[len(reopened)-1].Index)
+	if reopened[len(reopened)-1].GetIndex() != uint64(totalEntries) {
+		t.Fatalf("last entry after reopen should be %d, got %d", totalEntries, reopened[len(reopened)-1].GetIndex())
 	}
 
 	// 7. Append more data after reopen
@@ -1627,8 +1628,8 @@ func TestIntegration_CrashRecovery(t *testing.T) {
 			t.Fatalf("expected %d entries after recovery, got %d", expectedCount, len(entries))
 		}
 
-		if entries[0].Index != 1 || entries[len(entries)-1].Index != uint64(expectedCount) {
-			t.Fatalf("data integrity failed: first=%d, last=%d", entries[0].Index, entries[len(entries)-1].Index)
+		if entries[0].GetIndex() != 1 || entries[len(entries)-1].GetIndex() != uint64(expectedCount) {
+			t.Fatalf("data integrity failed: first=%d, last=%d", entries[0].GetIndex(), entries[len(entries)-1].GetIndex())
 		}
 	})
 
@@ -1727,7 +1728,7 @@ func TestIntegration_CrashRecovery(t *testing.T) {
 
 		// If we reached here, NewSegmentedWal skipped the bad segment.
 		// Now check that Recover() fails as expected
-		err = tw.Recover(0, func(e raftpb.Entry) error {
+		err = tw.Recover(0, func(e *raftpb.Entry) error {
 			return nil
 		})
 
@@ -1769,8 +1770,8 @@ func TestIntegration_TruncateThenAppend(t *testing.T) {
 
 		// Verify truncation worked
 		remaining := tw.MustReadAll()
-		if len(remaining) == 0 || remaining[0].Index != truncateAt+1 {
-			t.Fatalf("expected first entry after truncate to be %d, got %d", truncateAt+1, remaining[0].Index)
+		if len(remaining) == 0 || remaining[0].GetIndex() != truncateAt+1 {
+			t.Fatalf("expected first entry after truncate to be %d, got %d", truncateAt+1, remaining[0].GetIndex())
 		}
 
 		// Append new entries - should continue correctly
@@ -1779,11 +1780,11 @@ func TestIntegration_TruncateThenAppend(t *testing.T) {
 
 		// Final verification - no gaps
 		final := tw.MustReadAll()
-		if final[len(final)-1].Index != nextExpected+50 {
+		if final[len(final)-1].GetIndex() != nextExpected+50 {
 			t.Fatalf("last entry should be %d", nextExpected+50)
 		}
 
-		t.Logf("✅ Truncate+Append successful: truncated at %d, appended up to %d", truncateAt, final[len(final)-1].Index)
+		t.Logf("✅ Truncate+Append successful: truncated at %d, appended up to %d", truncateAt, final[len(final)-1].GetIndex())
 	})
 
 	t.Run("keeps later segments after truncation", func(t *testing.T) {
@@ -1810,11 +1811,11 @@ func TestIntegration_TruncateThenAppend(t *testing.T) {
 
 		// Should continue from the next segment
 		entries := tw.MustReadAll()
-		if len(entries) == 0 || entries[0].Index != sealedEnd+1 {
-			t.Fatalf("expected continuation from %d, got %d", sealedEnd+1, entries[0].Index)
+		if len(entries) == 0 || entries[0].GetIndex() != sealedEnd+1 {
+			t.Fatalf("expected continuation from %d, got %d", sealedEnd+1, entries[0].GetIndex())
 		}
 
-		t.Logf("✅ Kept later segments: truncated at %d, resumed at %d", sealedEnd, entries[0].Index)
+		t.Logf("✅ Kept later segments: truncated at %d, resumed at %d", sealedEnd, entries[0].GetIndex())
 	})
 }
 
@@ -1841,8 +1842,8 @@ func TestEdgeCases_LargeEntries(t *testing.T) {
 		if len(entries) != 1 {
 			t.Fatalf("expected 1 entry, got %d", len(entries))
 		}
-		if entries[0].Index != 1 {
-			t.Fatalf("wrong index: got %d", entries[0].Index)
+		if entries[0].GetIndex() != 1 {
+			t.Fatalf("wrong index: got %d", entries[0].GetIndex())
 		}
 		if len(entries[0].Data) != len(largeData) {
 			t.Fatalf("data length corrupted: got %d, want %d", len(entries[0].Data), len(largeData))
@@ -1863,7 +1864,7 @@ func TestEdgeCases_LargeEntries(t *testing.T) {
 		}
 
 		for i, e := range entries {
-			if e.Index != uint64(i+1) {
+			if e.GetIndex() != uint64(i+1) {
 				t.Fatalf("index mismatch at position %d", i)
 			}
 		}
@@ -1898,7 +1899,7 @@ func TestEdgeCases_LargeEntries(t *testing.T) {
 			t.Fatalf("expected 30 entries, got %d", len(entries))
 		}
 
-		if entries[0].Index != 1 || len(entries[0].Data) != len(hugeData) {
+		if entries[0].GetIndex() != 1 || len(entries[0].Data) != len(hugeData) {
 			t.Fatal("large entry was corrupted")
 		}
 
@@ -1983,7 +1984,7 @@ func TestEdgeCases_EmptySegments(t *testing.T) {
 		tw := NewTestWALSmall(t)
 
 		var count int
-		err := tw.Recover(0, func(e raftpb.Entry) error {
+		err := tw.Recover(0, func(e *raftpb.Entry) error {
 			count++
 			return nil
 		})

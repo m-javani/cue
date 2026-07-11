@@ -29,6 +29,7 @@ import (
 	"go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap/zaptest"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestStorage is a thin wrapper for convenience + Must* helpers
@@ -79,12 +80,12 @@ func (ts *TestStorage) MustClose() {
 	require.NoError(ts.t, ts.Close())
 }
 
-func (ts *TestStorage) MustAppend(entries []raftpb.Entry) {
+func (ts *TestStorage) MustAppend(entries []*raftpb.Entry) {
 	ts.t.Helper()
 	require.NoError(ts.t, ts.Append(entries))
 }
 
-func (ts *TestStorage) MustAppendCommitted(entry raftpb.Entry) {
+func (ts *TestStorage) MustAppendCommitted(entry *raftpb.Entry) {
 	ts.t.Helper()
 	require.NoError(ts.t, ts.AppendCommitted(entry))
 }
@@ -99,12 +100,12 @@ func (ts *TestStorage) MustCompact() {
 	require.NoError(ts.t, ts.Compact())
 }
 
-func (ts *TestStorage) MustInstallSnapshot(meta raftpb.SnapshotMetadata) {
+func (ts *TestStorage) MustInstallSnapshot(meta *raftpb.SnapshotMetadata) {
 	ts.t.Helper()
 	require.NoError(ts.t, ts.InstallSnapshot(meta))
 }
 
-func (ts *TestStorage) MustEntries(lo, hi, maxSize uint64) []raftpb.Entry {
+func (ts *TestStorage) MustEntries(lo, hi, maxSize uint64) []*raftpb.Entry {
 	ts.t.Helper()
 	entries, err := ts.Entries(lo, hi, maxSize)
 	require.NoError(ts.t, err)
@@ -132,7 +133,7 @@ func (ts *TestStorage) MustLastIndex() uint64 {
 	return li
 }
 
-func (ts *TestStorage) MustSnapshot() raftpb.Snapshot {
+func (ts *TestStorage) MustSnapshot() *raftpb.Snapshot {
 	ts.t.Helper()
 	snap, err := ts.Snapshot()
 	require.NoError(ts.t, err)
@@ -145,21 +146,21 @@ func (ts *TestStorage) MustGetCompletedJobIDs() map[string]bool {
 }
 
 // ==================== Entry Builders ====================
-
-func MakeRaftEntry(index, term uint64, cmd model.Command) raftpb.Entry {
+func MakeRaftEntry(index, term uint64, cmd model.Command) *raftpb.Entry {
 	data, err := msgpack.Marshal(cmd)
 	if err != nil {
 		panic(err) // safe in tests
 	}
-	return raftpb.Entry{
-		Index: index,
-		Term:  term,
-		Type:  raftpb.EntryNormal,
+	entryType := raftpb.EntryNormal
+	return &raftpb.Entry{
+		Index: proto.Uint64(index),
+		Term:  proto.Uint64(term),
+		Type:  &entryType,
 		Data:  data,
 	}
 }
 
-func MakeAddJobEntry(index, term uint64, jobID string) raftpb.Entry {
+func MakeAddJobEntry(index, term uint64, jobID string) *raftpb.Entry {
 	return MakeRaftEntry(index, term, model.Command{
 		Type: model.CmdAddJob,
 		AddJob: &model.AddJobPayload{
@@ -168,14 +169,14 @@ func MakeAddJobEntry(index, term uint64, jobID string) raftpb.Entry {
 	})
 }
 
-func MakeDoneEntry(index, term uint64, jobIDs ...string) raftpb.Entry {
+func MakeDoneEntry(index, term uint64, jobIDs ...string) *raftpb.Entry {
 	return MakeRaftEntry(index, term, model.Command{
 		Type: model.CmdDone,
 		Done: &model.DonePayload{JobIDs: jobIDs},
 	})
 }
 
-func MakeDropEntry(index, term uint64, jobIDs ...string) raftpb.Entry {
+func MakeDropEntry(index, term uint64, jobIDs ...string) *raftpb.Entry {
 	return MakeRaftEntry(index, term, model.Command{
 		Type: model.CmdDrop,
 		Drop: &model.DropPayload{JobIDs: jobIDs},
@@ -183,8 +184,8 @@ func MakeDropEntry(index, term uint64, jobIDs ...string) raftpb.Entry {
 }
 
 // Convenience for multiple entries
-func MakeSequentialEntries(startIndex, count uint64, term uint64, cmdType model.CommandType) []raftpb.Entry {
-	entries := make([]raftpb.Entry, count)
+func MakeSequentialEntries(startIndex, count uint64, term uint64, cmdType model.CommandType) []*raftpb.Entry {
+	entries := make([]*raftpb.Entry, count)
 	for i := uint64(0); i < count; i++ {
 		idx := startIndex + i
 		switch cmdType {
@@ -214,19 +215,19 @@ func TestNewRaftStorage_CreatesValidInstance(t *testing.T) {
 	// InitialState from RaftStorage interface
 	hs, cs, err := ts.InitialState()
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), hs.Term, "initial term should be 0")
-	require.Equal(t, uint64(0), hs.Commit, "initial commit should be 0")
+	require.Equal(t, uint64(0), hs.GetTerm(), "initial term should be 0")
+	require.Equal(t, uint64(0), hs.GetCommit(), "initial commit should be 0")
 
 	// ConfState checks (etcd raft v3)
-	require.Empty(t, cs.Voters, "initial voters should be empty")
-	require.Empty(t, cs.Learners, "initial learners should be empty")
-	require.Empty(t, cs.VotersOutgoing, "initial voters outgoing should be empty")
-	require.Empty(t, cs.LearnersNext, "initial learners next should be empty")
+	require.Empty(t, cs.GetVoters(), "initial voters should be empty")
+	require.Empty(t, cs.GetLearners(), "initial learners should be empty")
+	require.Empty(t, cs.GetVotersOutgoing(), "initial voters outgoing should be empty")
+	require.Empty(t, cs.GetLearnersNext(), "initial learners next should be empty")
 
 	// Snapshot - code normalizes both Index and Term from 0 to 1
 	snap := ts.MustSnapshot()
-	require.Equal(t, uint64(1), snap.Metadata.Index, "initial snapshot index should be normalized to 1")
-	require.Equal(t, uint64(1), snap.Metadata.Term, "initial snapshot term should be normalized to 1")
+	require.Equal(t, uint64(1), snap.Metadata.GetIndex(), "initial snapshot index should be normalized to 1")
+	require.Equal(t, uint64(1), snap.Metadata.GetTerm(), "initial snapshot term should be normalized to 1")
 
 	// Job index should be empty
 	completed := ts.MustGetCompletedJobIDs()
@@ -339,7 +340,7 @@ func TestRaftStorage_AppendAndEntries(t *testing.T) {
 
 	// 2. Truncation on conflict (standard Raft behavior)
 	// New leader sends entries starting at index 3 with new term → truncate tail
-	conflictEntries := []raftpb.Entry{
+	conflictEntries := []*raftpb.Entry{
 		MakeAddJobEntry(3, 2, "new-job-3"),
 		MakeAddJobEntry(4, 2, "new-job-4"),
 		MakeAddJobEntry(5, 2, "new-job-5"),
@@ -383,9 +384,9 @@ func TestRaftStorage_Term_FirstLastIndex(t *testing.T) {
 	require.Equal(t, uint64(8), ts.MustLastIndex())
 
 	// 3. Install Snapshot
-	ts.MustInstallSnapshot(raftpb.SnapshotMetadata{
-		Index: 5,
-		Term:  2,
+	ts.MustInstallSnapshot(&raftpb.SnapshotMetadata{
+		Index: proto.Uint64(5),
+		Term:  proto.Uint64(2),
 	})
 
 	// Current behavior in InstallSnapshot (does NOT advance firstIndex)
@@ -545,7 +546,7 @@ func TestRaftStorage_Compact_RespectsPendingJobs(t *testing.T) {
 	last := 10
 	for i := range 8 {
 		d := MakeDoneEntry(uint64(last+i), 1, fmt.Sprintf("job-%d", i))
-		ts.MustAppend([]raftpb.Entry{d})
+		ts.MustAppend([]*raftpb.Entry{d})
 		ts.MustAppendCommitted(d)
 	}
 
@@ -706,26 +707,26 @@ func TestRaftStorage_Snapshot(t *testing.T) {
 
 	// Case 1: Empty / initial state
 	snap := ts.MustSnapshot()
-	require.Equal(t, uint64(1), snap.Metadata.Index, "empty storage should return normalized index = 1")
-	require.Equal(t, uint64(1), snap.Metadata.Term, "empty storage should return normalized term = 1")
+	require.Equal(t, uint64(1), snap.Metadata.GetIndex(), "empty storage should return normalized index = 1")
+	require.Equal(t, uint64(1), snap.Metadata.GetTerm(), "empty storage should return normalized term = 1")
 
 	// Case 2: After some entries are appended
 	entries := MakeSequentialEntries(5, 8, 2, model.CmdAddJob)
 	ts.MustAppend(entries)
 
 	snap = ts.MustSnapshot()
-	require.Equal(t, uint64(1), snap.Metadata.Index, "Snapshot() returns the snapshot metadata, not the last log index")
-	require.Equal(t, uint64(1), snap.Metadata.Term)
+	require.Equal(t, uint64(1), snap.Metadata.GetIndex(), "Snapshot() returns the snapshot metadata, not the last log index")
+	require.Equal(t, uint64(1), snap.Metadata.GetTerm())
 
 	// Case 3: After installing a snapshot
-	ts.MustInstallSnapshot(raftpb.SnapshotMetadata{
-		Index: 20,
-		Term:  5,
+	ts.MustInstallSnapshot(&raftpb.SnapshotMetadata{
+		Index: proto.Uint64(20),
+		Term:  proto.Uint64(5),
 	})
 
 	snap = ts.MustSnapshot()
-	require.Equal(t, uint64(20), snap.Metadata.Index, "should reflect installed snapshot index")
-	require.Equal(t, uint64(5), snap.Metadata.Term, "should reflect installed snapshot term")
+	require.Equal(t, uint64(20), snap.Metadata.GetIndex(), "should reflect installed snapshot index")
+	require.Equal(t, uint64(5), snap.Metadata.GetTerm(), "should reflect installed snapshot term")
 }
 
 // TestRaftStorage_InstallSnapshot tests installSnapshot, confState update,
@@ -735,22 +736,22 @@ func TestRaftStorage_InstallSnapshot(t *testing.T) {
 
 	// Initial state
 	snap := ts.MustSnapshot()
-	require.Equal(t, uint64(1), snap.Metadata.Index)
-	require.Equal(t, uint64(1), snap.Metadata.Term)
+	require.Equal(t, uint64(1), snap.Metadata.GetIndex())
+	require.Equal(t, uint64(1), snap.Metadata.GetTerm())
 
 	// Install a new snapshot
-	meta := raftpb.SnapshotMetadata{
-		Index:     42,
-		Term:      5,
-		ConfState: raftpb.ConfState{Voters: []uint64{1, 2, 3}},
+	meta := &raftpb.SnapshotMetadata{
+		Index:     proto.Uint64(42),
+		Term:      proto.Uint64(5),
+		ConfState: &raftpb.ConfState{Voters: []uint64{1, 2, 3}},
 	}
 
 	ts.MustInstallSnapshot(meta)
 
 	// Verify snapshot metadata was updated
 	snap = ts.MustSnapshot()
-	require.Equal(t, uint64(42), snap.Metadata.Index, "InstallSnapshot should update snapshot index")
-	require.Equal(t, uint64(5), snap.Metadata.Term, "InstallSnapshot should update snapshot term")
+	require.Equal(t, uint64(42), snap.Metadata.GetIndex(), "InstallSnapshot should update snapshot index")
+	require.Equal(t, uint64(5), snap.Metadata.GetTerm(), "InstallSnapshot should update snapshot term")
 	require.Equal(t, []uint64{1, 2, 3}, snap.Metadata.ConfState.Voters, "ConfState should be updated")
 
 	// Current behavior in implementation (firstIndex is NOT advanced)
@@ -771,10 +772,10 @@ func TestRaftStorage_SnapshotMeta_Persistence(t *testing.T) {
 	// Phase 1: Create storage and install snapshot
 	ts1 := NewTestStorageWithDirs(t, walDir, snapDir, 10)
 
-	meta := raftpb.SnapshotMetadata{
-		Index: 50,
-		Term:  7,
-		ConfState: raftpb.ConfState{
+	meta := &raftpb.SnapshotMetadata{
+		Index: proto.Uint64(50),
+		Term:  proto.Uint64(7),
+		ConfState: &raftpb.ConfState{
 			Voters: []uint64{1, 2, 3},
 		},
 	}
@@ -783,8 +784,8 @@ func TestRaftStorage_SnapshotMeta_Persistence(t *testing.T) {
 
 	// Verify in current instance
 	snap := ts1.MustSnapshot()
-	require.Equal(t, uint64(50), snap.Metadata.Index)
-	require.Equal(t, uint64(7), snap.Metadata.Term)
+	require.Equal(t, uint64(50), snap.Metadata.GetIndex())
+	require.Equal(t, uint64(7), snap.Metadata.GetTerm())
 
 	ts1.MustClose()
 
@@ -792,9 +793,9 @@ func TestRaftStorage_SnapshotMeta_Persistence(t *testing.T) {
 	ts2 := NewTestStorageWithDirs(t, walDir, snapDir, 10)
 
 	snap2 := ts2.MustSnapshot()
-	require.Equal(t, uint64(50), snap2.Metadata.Index, "snapshot metadata should survive restart")
-	require.Equal(t, uint64(7), snap2.Metadata.Term, "snapshot term should survive restart")
-	require.Equal(t, []uint64{1, 2, 3}, snap2.Metadata.ConfState.Voters)
+	require.Equal(t, uint64(50), snap2.Metadata.GetIndex(), "snapshot metadata should survive restart")
+	require.Equal(t, uint64(7), snap2.Metadata.GetTerm(), "snapshot term should survive restart")
+	require.Equal(t, []uint64{1, 2, 3}, snap2.Metadata.ConfState.GetVoters())
 
 	t.Log("Snapshot metadata successfully persisted and loaded on restart")
 }
@@ -812,8 +813,8 @@ func TestRaftStorage_EmptyState(t *testing.T) {
 
 	// Snapshot behavior
 	snap := ts.MustSnapshot()
-	require.Equal(t, uint64(1), snap.Metadata.Index, "Snapshot() should normalize index to 1")
-	require.Equal(t, uint64(1), snap.Metadata.Term, "Snapshot() should normalize term to 1")
+	require.Equal(t, uint64(1), snap.Metadata.GetIndex(), "Snapshot() should normalize index to 1")
+	require.Equal(t, uint64(1), snap.Metadata.GetTerm(), "Snapshot() should normalize term to 1")
 
 	// Entries() behavior
 	_, err := ts.Entries(0, 1, 0)
@@ -825,7 +826,7 @@ func TestRaftStorage_EmptyState(t *testing.T) {
 	// Term() behavior - according to current implementation
 	term, err := ts.Term(0)
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), term, "Term(0) returns snapshotMeta.Term which is 0 in initial state")
+	require.Equal(t, uint64(1), term, "Term(0) returns snapshotMeta.Term which is 0 in initial state")
 
 	_, err = ts.Term(100)
 	require.ErrorIs(t, err, raft.ErrUnavailable, "index > lastIndex should return ErrUnavailable")
@@ -845,7 +846,7 @@ func TestRaftStorage_TruncationOnAppend(t *testing.T) {
 	require.Equal(t, uint64(17), ts.MustLastIndex())
 
 	// Conflicting append - truncate tail
-	conflict := []raftpb.Entry{
+	conflict := []*raftpb.Entry{
 		MakeAddJobEntry(14, 2, "new-leader-14"),
 		MakeAddJobEntry(15, 2, "new-leader-15"),
 		MakeAddJobEntry(16, 2, "new-leader-16"),
@@ -916,8 +917,8 @@ func TestRaftStorage_ErrorPaths(t *testing.T) {
 
 		// Should fall back to default snapshot
 		snap := ts.MustSnapshot()
-		require.Equal(t, uint64(1), snap.Metadata.Index, "should use default index on corrupted snapshot")
-		require.Equal(t, uint64(1), snap.Metadata.Term, "should use default term on corrupted snapshot")
+		require.Equal(t, uint64(1), snap.Metadata.GetIndex(), "should use default index on corrupted snapshot")
+		require.Equal(t, uint64(1), snap.Metadata.GetTerm(), "should use default term on corrupted snapshot")
 	})
 
 	t.Run("CloseWithPendingBuffer", func(t *testing.T) {
@@ -1082,11 +1083,11 @@ func TestRaftStorage_CompactDuringAppend(t *testing.T) {
 	wg.Go(func() {
 		for i := range 30 {
 			entry := MakeAddJobEntry(uint64(i), 1, fmt.Sprintf("append-job-%d", i))
-			ts.MustAppend([]raftpb.Entry{entry})
+			ts.MustAppend([]*raftpb.Entry{entry})
 			ts.MustAppendCommitted(entry)
 			time.Sleep(1 * time.Millisecond)
 			if i%2 == 0 {
-				ts.MustAppend([]raftpb.Entry{entry})
+				ts.MustAppend([]*raftpb.Entry{entry})
 				entry = MakeAddJobEntry(uint64(i), 1, fmt.Sprintf("append-job-%d", i))
 				ts.MustAppendCommitted(entry)
 			}

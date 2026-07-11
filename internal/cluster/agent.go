@@ -53,9 +53,9 @@ type ClusterAgent struct {
 
 	// Channels for Raft communication
 	proposeCh  chan ProposeRequest
-	stepCh     chan raftpb.Message
+	stepCh     chan *raftpb.Message
 	commitCh   chan CommittedEntry
-	outgoingCh chan raftpb.Message
+	outgoingCh chan *raftpb.Message
 	ctrlCh     chan ControlCmd
 	notifyCh   chan NotifyEvent
 
@@ -161,9 +161,9 @@ func NewClusterAgent(
 		leaderID:                 leaderID,
 		muPndPr:                  sync.RWMutex{},
 		proposeCh:                make(chan ProposeRequest, 1024),
-		stepCh:                   make(chan raftpb.Message, 1024),
+		stepCh:                   make(chan *raftpb.Message, 1024),
 		commitCh:                 make(chan CommittedEntry, 1024),
-		outgoingCh:               make(chan raftpb.Message, 1024),
+		outgoingCh:               make(chan *raftpb.Message, 1024),
 		ctrlCh:                   make(chan ControlCmd, 1024),
 		notifyCh:                 make(chan NotifyEvent, 1024),
 		isLeader:                 atomic.Bool{},
