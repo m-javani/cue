@@ -155,7 +155,7 @@ type ProxyRequestType uint8
 const (
 	ReqHeartbeatReport ProxyRequestType = iota
 	ReqAddTopic
-	ReqAddJob
+	ReqAddJobs
 	ReqDone
 )
 
@@ -165,8 +165,8 @@ func (t ProxyRequestType) String() string {
 		return "ReqHeartbeatReport"
 	case ReqAddTopic:
 		return "ReqAddTopic"
-	case ReqAddJob:
-		return "ReqAddJob"
+	case ReqAddJobs:
+		return "ReqAddJobs"
 	case ReqDone:
 		return "ReqDone"
 	default:
@@ -181,7 +181,7 @@ type ProxyRequest struct {
 
 	AddTopic        *AddTopicPayload `msgpack:"add_topic,omitempty"`
 	HeartbeatReport *HeartbeatReport `msgpack:"heartbeat_report,omitempty"`
-	AddJob          *AddJobPayload   `msgpack:"add_job,omitempty"`
+	AddJobs         *AddJobsPayload  `msgpack:"add_job,omitempty"`
 	Done            *DonePayload     `msgpack:"done,omitempty"`
 }
 

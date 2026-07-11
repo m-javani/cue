@@ -368,7 +368,7 @@ func (p *Proxy) SendRequest(req model.ProxyRequest) error {
 	}
 
 	// Optional: small delay after sending critical requests
-	if req.Type == model.ReqAddTopic || req.Type == model.ReqAddJob {
+	if req.Type == model.ReqAddTopic || req.Type == model.ReqAddJobs {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return nil
@@ -418,8 +418,11 @@ func (p *Proxy) SendAddTopic(topic string) {
 func (p *Proxy) SendAddJob(job model.Job) error {
 	req := model.ProxyRequest{
 		RequestID: fmt.Sprintf("addj-%d", p.nextReqID.Add(1)),
-		Type:      model.ReqAddJob,
-		AddJob:    &model.AddJobPayload{Job: job},
+		Type:      model.ReqAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: job.Topic,
+			Jobs:  []model.Job{job},
+		},
 	}
 	return p.SendRequest(req)
 }
@@ -672,8 +675,8 @@ func (m *InternalsMock) handleClusterCommand(cmd model.Command) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if cmd.Type == model.CmdAddJob && cmd.AddJob != nil {
-		topic := cmd.AddJob.Job.Topic
+	if cmd.Type == model.CmdAddJobs && cmd.AddJobs != nil {
+		topic := cmd.AddJobs.Topic
 		m.commands[topic] = append(m.commands[topic], cmd)
 
 		if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
@@ -697,8 +700,10 @@ func (m *InternalsMock) DispatchOutboundMsgs(topic, proxyID string) error {
 
 	var jobs []*model.Job
 	for _, c := range cmds {
-		if c.Type == model.CmdAddJob && c.AddJob != nil {
-			jobs = append(jobs, &c.AddJob.Job)
+		if c.Type == model.CmdAddJobs && c.AddJobs != nil {
+			for _, job := range c.AddJobs.Jobs {
+				jobs = append(jobs, &job)
+			}
 		}
 	}
 
@@ -1217,8 +1222,11 @@ func TestGateway_LoopbackErrorResponses(t *testing.T) {
 
 		req := model.ProxyRequest{
 			RequestID: reqID,
-			Type:      model.ReqAddJob,
-			AddJob:    &model.AddJobPayload{Job: job},
+			Type:      model.ReqAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: job.Topic,
+				Jobs:  []model.Job{job},
+			},
 		}
 
 		err := prx.SendRequest(req)
@@ -1264,8 +1272,11 @@ func TestGateway_LoopbackErrorResponses(t *testing.T) {
 
 		req := model.ProxyRequest{
 			RequestID: reqID,
-			Type:      model.ReqAddJob,
-			AddJob:    &model.AddJobPayload{Job: job},
+			Type:      model.ReqAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: job.Topic,
+				Jobs:  []model.Job{job},
+			},
 		}
 
 		err := prx.SendRequest(req)

@@ -3329,13 +3329,14 @@ func TestHandleAddJob_DuplicateJobID(t *testing.T) {
 	// Try to add same job ID again - should fail with duplicate error
 	respCh := make(chan model.ToProducerResponse, 1)
 	cmd := model.Command{
-		Type: model.CmdAddJob,
-		AddJob: &model.AddJobPayload{
-			Job: model.Job{
+		Type: model.CmdAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: "test-topic",
+			Jobs: []model.Job{{
 				ID:    jobID,
 				Topic: "test-topic",
 				Data:  []byte("duplicate data"),
-			},
+			}},
 		},
 		RespInfo: &model.RespInfo{
 			RequestID: "req-duplicate-1",
@@ -3418,8 +3419,8 @@ func TestHandleAddJob_NilPayload(t *testing.T) {
 
 	respCh := make(chan model.ToProducerResponse, 1)
 	cmd := model.Command{
-		Type:   model.CmdAddJob,
-		AddJob: nil,
+		Type:    model.CmdAddJobs,
+		AddJobs: nil,
 		RespInfo: &model.RespInfo{
 			RequestID: "req-addjob-nil-1",
 			RespCh:    respCh,

@@ -162,9 +162,10 @@ func MakeRaftEntry(index, term uint64, cmd model.Command) *raftpb.Entry {
 
 func MakeAddJobEntry(index, term uint64, jobID string) *raftpb.Entry {
 	return MakeRaftEntry(index, term, model.Command{
-		Type: model.CmdAddJob,
-		AddJob: &model.AddJobPayload{
-			Job: model.Job{ID: jobID},
+		Type: model.CmdAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: "test-topic",
+			Jobs:  []model.Job{{ID: jobID}},
 		},
 	})
 }
@@ -189,7 +190,7 @@ func MakeSequentialEntries(startIndex, count uint64, term uint64, cmdType model.
 	for i := uint64(0); i < count; i++ {
 		idx := startIndex + i
 		switch cmdType {
-		case model.CmdAddJob:
+		case model.CmdAddJobs:
 			entries[i] = MakeAddJobEntry(idx, term, fmt.Sprintf("job-%d", idx))
 		case model.CmdDone:
 			entries[i] = MakeDoneEntry(idx, term, fmt.Sprintf("job-%d", idx))
@@ -296,7 +297,7 @@ func TestStorageCore_updateIndices(t *testing.T) {
 	require.Equal(t, uint64(0), ts.MustLastIndex(), "fresh storage should have lastIndex = 0")
 
 	// Case 2: Append consecutive entries
-	entries := MakeSequentialEntries(1, 8, 1, model.CmdAddJob) // indices 1-8
+	entries := MakeSequentialEntries(1, 8, 1, model.CmdAddJobs) // indices 1-8
 	ts.MustAppend(entries)
 
 	require.Equal(t, uint64(1), ts.MustFirstIndex())
@@ -329,7 +330,7 @@ func TestRaftStorage_AppendAndEntries(t *testing.T) {
 	ts := NewTestStorage(t, 10)
 
 	// 1. Normal append - consecutive entries
-	entries1 := MakeSequentialEntries(1, 5, 1, model.CmdAddJob) // indices 1 to 5
+	entries1 := MakeSequentialEntries(1, 5, 1, model.CmdAddJobs) // indices 1 to 5
 	ts.MustAppend(entries1)
 
 	require.Equal(t, uint64(1), ts.MustFirstIndex())
@@ -377,7 +378,7 @@ func TestRaftStorage_Term_FirstLastIndex(t *testing.T) {
 	require.Equal(t, uint64(0), ts.MustLastIndex())
 
 	// 2. Normal append
-	entries := MakeSequentialEntries(1, 8, 1, model.CmdAddJob)
+	entries := MakeSequentialEntries(1, 8, 1, model.CmdAddJobs)
 	ts.MustAppend(entries)
 
 	require.Equal(t, uint64(1), ts.MustFirstIndex())
@@ -537,7 +538,7 @@ func TestRaftStorage_Compact_RespectsPendingJobs(t *testing.T) {
 	ts := NewTestStorage(t, 20)
 
 	// Populate the main entries map using Append (this is what compact() relies on)
-	entries := MakeSequentialEntries(0, 10, 1, model.CmdAddJob)
+	entries := MakeSequentialEntries(0, 10, 1, model.CmdAddJobs)
 	ts.MustAppend(entries)
 	for _, e := range entries {
 		ts.MustAppendCommitted(e)
@@ -580,7 +581,7 @@ func TestRaftStorage_Compact_AfterAllCompleted(t *testing.T) {
 	ts := NewTestStorage(t, 20) // large threshold to avoid auto-flush
 
 	// Add several jobs
-	entries := MakeSequentialEntries(5, 15, 1, model.CmdAddJob) // indices 5 to 19
+	entries := MakeSequentialEntries(5, 15, 1, model.CmdAddJobs) // indices 5 to 19
 	ts.MustAppend(entries)
 
 	// Mark all of them as committed
@@ -633,7 +634,7 @@ func TestRaftStorage_Compact_EdgeCases(t *testing.T) {
 	ts.MustCompact()
 
 	// Case 3: Entries exist but all jobs are completed
-	entries := MakeSequentialEntries(5, 8, 1, model.CmdAddJob) // indices 5 to 12
+	entries := MakeSequentialEntries(5, 8, 1, model.CmdAddJobs) // indices 5 to 12
 	ts.MustAppend(entries)
 
 	// Mirror with AppendCommitted
@@ -711,7 +712,7 @@ func TestRaftStorage_Snapshot(t *testing.T) {
 	require.Equal(t, uint64(1), snap.Metadata.GetTerm(), "empty storage should return normalized term = 1")
 
 	// Case 2: After some entries are appended
-	entries := MakeSequentialEntries(5, 8, 2, model.CmdAddJob)
+	entries := MakeSequentialEntries(5, 8, 2, model.CmdAddJobs)
 	ts.MustAppend(entries)
 
 	snap = ts.MustSnapshot()
@@ -839,7 +840,7 @@ func TestRaftStorage_TruncationOnAppend(t *testing.T) {
 	ts := NewTestStorage(t, 10)
 
 	// Initial append - firstIndex stays at 1 until compaction
-	initial := MakeSequentialEntries(10, 8, 1, model.CmdAddJob) // indices 10 to 17
+	initial := MakeSequentialEntries(10, 8, 1, model.CmdAddJobs) // indices 10 to 17
 	ts.MustAppend(initial)
 
 	require.Equal(t, uint64(1), ts.MustFirstIndex(), "firstIndex remains 1 (only changes on compaction)")

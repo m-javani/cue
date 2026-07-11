@@ -476,16 +476,16 @@ func (p *ConnectionPair) runInboundHandler(ctx context.Context,
 		// Handle add job or done
 		var cmd model.Command
 		switch req.Type {
-		case model.ReqAddJob:
-			if !p.canAcceptJob(req.AddJob.Job.Topic) {
+		case model.ReqAddJobs:
+			if !p.canAcceptJob(req.AddJobs.Topic) {
 				// send a queue is full message to gateway
 				p.sendBackErrorResponse(req.RequestID, "queue_full")
 				continue
 			}
 
 			cmd = model.Command{
-				Type:   model.CmdAddJob,
-				AddJob: req.AddJob,
+				Type:    model.CmdAddJobs,
+				AddJobs: req.AddJobs,
 				RespInfo: &model.RespInfo{
 					RequestID: req.RequestID,
 					RespCh:    responseCh,

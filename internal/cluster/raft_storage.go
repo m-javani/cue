@@ -210,15 +210,15 @@ func (c *StorageCore) recover() error {
 		var cmd model.Command
 		if err := msgpack.Unmarshal(entry.Data, &cmd); err == nil {
 			switch cmd.Type {
-			case model.CmdAddJob:
-				if cmd.AddJob != nil {
-					jobID := cmd.AddJob.Job.ID
-
-					if _, exists := c.jobIndex[jobID]; !exists {
-						c.jobIndex[jobID] = &JobState{}
+			case model.CmdAddJobs:
+				if cmd.AddJobs != nil {
+					for _, job := range cmd.AddJobs.Jobs {
+						jobID := job.ID
+						if _, exists := c.jobIndex[jobID]; !exists {
+							c.jobIndex[jobID] = &JobState{}
+						}
+						c.jobIndex[jobID].AddIndex = entry.GetIndex()
 					}
-
-					c.jobIndex[jobID].AddIndex = entry.GetIndex()
 				}
 
 			case model.CmdDone, model.CmdDrop:
@@ -312,14 +312,16 @@ func (c *StorageCore) appendCommitted(entry *raftpb.Entry) error {
 	var cmd model.Command
 	if err := msgpack.Unmarshal(entry.Data, &cmd); err == nil {
 		switch cmd.Type {
-		case model.CmdAddJob:
-			if cmd.AddJob != nil {
-				jobID := cmd.AddJob.Job.ID
-				if _, exists := c.jobIndex[jobID]; !exists {
-					c.jobIndex[jobID] = &JobState{}
+		case model.CmdAddJobs:
+			if cmd.AddJobs != nil {
+				for _, job := range cmd.AddJobs.Jobs {
+					jobID := job.ID
+					if _, exists := c.jobIndex[jobID]; !exists {
+						c.jobIndex[jobID] = &JobState{}
+					}
+					c.jobIndex[jobID].AddIndex = entry.GetIndex()
+					c.jobIndex[jobID].CompleteType = "" // reset if re-added
 				}
-				c.jobIndex[jobID].AddIndex = entry.GetIndex()
-				c.jobIndex[jobID].CompleteType = "" // reset if re-added
 			}
 
 		case model.CmdDone, model.CmdDrop:

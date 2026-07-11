@@ -28,7 +28,7 @@ const (
 	CmdAddNode
 	CmdRemoveNode
 	CmdTransferLeader
-	CmdAddJob
+	CmdAddJobs
 	CmdDone
 	CmdDrop
 )
@@ -43,8 +43,8 @@ func (t CommandType) String() string {
 		return "CmdRemoveNode"
 	case CmdTransferLeader:
 		return "CmdTransferLeader"
-	case CmdAddJob:
-		return "CmdAddJob"
+	case CmdAddJobs:
+		return "CmdAddJobs"
 	case CmdDone:
 		return "CmdDone"
 	case CmdDrop:
@@ -69,7 +69,7 @@ type Command struct {
 	AddNode    *AddNodePayload
 	RemoveNode *RemoveNodePayload
 	Transfer   *TransferLeaderPayload
-	AddJob     *AddJobPayload
+	AddJobs    *AddJobsPayload
 	Done       *DonePayload
 	Drop       *DropPayload
 
@@ -103,8 +103,9 @@ type TransferLeaderPayload struct {
 	TargetNodeID string `msgpack:"target_node_id"`
 }
 
-type AddJobPayload struct {
-	Job Job `msgpack:"job"`
+type AddJobsPayload struct {
+	Topic string `msgpack:"topic"`
+	Jobs  []Job  `msgpack:"jobs"`
 }
 
 type DonePayload struct {
@@ -146,11 +147,11 @@ func (c Command) MarshalMsgpack() ([]byte, error) {
 		}
 		payload = c.Transfer
 
-	case CmdAddJob:
-		if c.AddJob == nil {
+	case CmdAddJobs:
+		if c.AddJobs == nil {
 			return nil, errors.New("add_job payload missing")
 		}
-		payload = c.AddJob
+		payload = c.AddJobs
 
 	case CmdDone:
 		if c.Done == nil {
@@ -217,9 +218,9 @@ func (c *Command) UnmarshalMsgpack(data []byte) error {
 			return fmt.Errorf("unmarshal transfer_leader: %w", err)
 		}
 
-	case CmdAddJob:
-		c.AddJob = new(AddJobPayload)
-		if err := msgpack.Unmarshal(arr[2], c.AddJob); err != nil {
+	case CmdAddJobs:
+		c.AddJobs = new(AddJobsPayload)
+		if err := msgpack.Unmarshal(arr[2], c.AddJobs); err != nil {
 			return fmt.Errorf("unmarshal add_job: %w", err)
 		}
 

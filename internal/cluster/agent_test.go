@@ -893,13 +893,14 @@ func TestReplication(t *testing.T) {
 		respCh := make(chan model.ToProducerResponse, 1)
 
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  fmt.Appendf(nil, "payload-%d", i),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
 				RequestID: "a-request-id",
@@ -1053,13 +1054,14 @@ func TestNewNodeCatchesUp(t *testing.T) {
 	for i := 1; i <= numCommands; i++ {
 		respCh := make(chan model.ToProducerResponse, 1)
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  fmt.Appendf(nil, "payload-%d", i),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
 				RequestID: fmt.Sprintf("job-%d", i),
@@ -1115,13 +1117,14 @@ func TestNewNodeCatchesUp(t *testing.T) {
 	// Try sending more commands after join
 	respCh := make(chan model.ToProducerResponse, 1)
 	cmd := model.Command{
-		Type: model.CmdAddJob,
-		AddJob: &model.AddJobPayload{
-			Job: model.Job{
+		Type: model.CmdAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: "test-topic",
+			Jobs: []model.Job{{
 				ID:    "job-after-join",
 				Topic: "test-topic",
 				Data:  []byte("post-join-payload"),
-			},
+			}},
 		},
 		RespInfo: &model.RespInfo{
 			RequestID: "a-request-id",
@@ -1184,13 +1187,14 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 	for i := 1; i <= 15; i++ {
 		respCh := make(chan model.ToProducerResponse, 1)
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  []byte(fmt.Sprintf("payload-%d", i)),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
 				RequestID: "a-request-id",
@@ -1220,13 +1224,14 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 	for i := 16; i <= 25; i++ {
 		respCh := make(chan model.ToProducerResponse, 1)
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  fmt.Appendf(nil, "payload-%d", i),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
 				RequestID: "a-request-id",
@@ -1301,13 +1306,14 @@ func TestClusterMembershipChanges(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		respCh := make(chan model.ToProducerResponse, 1)
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  []byte(fmt.Sprintf("payload-%d", i)),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
 				RequestID: fmt.Sprintf("job-%d", i),
@@ -1430,13 +1436,14 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 			defer wg.Done()
 			respCh := make(chan model.ToProducerResponse, 1)
 			cmd := model.Command{
-				Type: model.CmdAddJob,
-				AddJob: &model.AddJobPayload{
-					Job: model.Job{
+				Type: model.CmdAddJobs,
+				AddJobs: &model.AddJobsPayload{
+					Topic: "test-topic",
+					Jobs: []model.Job{{
 						ID:    fmt.Sprintf("job-%d", i),
 						Topic: "test-topic",
 						Data:  []byte(fmt.Sprintf("data-%d", i)),
-					},
+					}},
 				},
 				RespInfo: &model.RespInfo{
 					RequestID: "a-request-id",
@@ -1479,13 +1486,13 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 			defer wg.Done()
 			respCh := make(chan model.ToProducerResponse, 1)
 			cmd := model.Command{
-				Type: model.CmdAddJob,
-				AddJob: &model.AddJobPayload{
-					Job: model.Job{
+				Type: model.CmdAddJobs,
+				AddJobs: &model.AddJobsPayload{
+					Jobs: []model.Job{{
 						ID:    fmt.Sprintf("job-%d", i),
 						Topic: "test-topic",
 						Data:  []byte(fmt.Sprintf("data-%d", i)),
-					},
+					}},
 				},
 				RespInfo: &model.RespInfo{
 					RequestID: "a-request-id",

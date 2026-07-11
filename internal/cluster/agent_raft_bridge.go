@@ -253,14 +253,25 @@ func (a *ClusterAgent) handleNormalCommand(committed CommittedEntry) error {
 	}
 
 	switch cmd.Type {
-	case model.CmdAddJob:
-		if cmd.AddJob == nil {
+	case model.CmdAddJobs:
+		if cmd.AddJobs == nil {
 			return fmt.Errorf("add_job payload missing")
 		}
-		if a.deadJobs[cmd.AddJob.Job.ID] {
+
+		alive := len(cmd.AddJobs.Jobs)
+		for i := range cmd.AddJobs.Jobs {
+			if a.deadJobs[cmd.AddJobs.Jobs[i].ID] {
+				alive--
+				cmd.AddJobs.Jobs[i].Done = true
+			}
+		}
+		if alive == 0 {
 			return nil
 		}
-		return a.handler.ProcessCommand(a.ctx, cmd.AddJob.Job.Topic, &cmd, committed.Index)
+
+		a.handler.ProcessCommand(a.ctx, cmd.AddJobs.Jobs[0].Topic, &cmd, committed.Index)
+
+		return nil
 
 	case model.CmdDone:
 		if cmd.Done == nil {

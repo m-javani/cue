@@ -39,7 +39,7 @@ func TestProxyRequestType_String(t *testing.T) {
 		},
 		{
 			name: "ReqAddJob",
-			t:    ReqAddJob,
+			t:    ReqAddJobs,
 			want: "ReqAddJob",
 		},
 		{
@@ -76,8 +76,8 @@ func TestProxyRequestTypeConstants(t *testing.T) {
 	if ReqAddTopic != 1 {
 		t.Errorf("ReqAddTopic = %v, want 1", ReqAddTopic)
 	}
-	if ReqAddJob != 2 {
-		t.Errorf("ReqAddJob = %v, want 2", ReqAddJob)
+	if ReqAddJobs != 2 {
+		t.Errorf("ReqAddJob = %v, want 2", ReqAddJobs)
 	}
 	if ReqDone != 3 {
 		t.Errorf("ReqDone = %v, want 3", ReqDone)
@@ -142,7 +142,7 @@ func TestProxyRequest(t *testing.T) {
 						{Topic: "topic2", ConsumptionScore: 200},
 					},
 				},
-				AddJob: &AddJobPayload{
+				AddJobs: &AddJobsPayload{
 					// AddJobPayload fields would be defined here
 				},
 				Done: &DonePayload{
@@ -163,8 +163,8 @@ func TestProxyRequest(t *testing.T) {
 						{Topic: "topic2", ConsumptionScore: 200},
 					},
 				},
-				AddJob: &AddJobPayload{},
-				Done:   &DonePayload{},
+				AddJobs: &AddJobsPayload{},
+				Done:    &DonePayload{},
 			},
 		},
 		{
@@ -182,24 +182,26 @@ func TestProxyRequest(t *testing.T) {
 			name: "ProxyRequest with only AddJob",
 			request: &ProxyRequest{
 				RequestID: "req-789",
-				Type:      ReqAddJob,
-				AddJob: &AddJobPayload{
-					Job: Job{
+				Type:      ReqAddJobs,
+				AddJobs: &AddJobsPayload{
+					Topic: "test-topic",
+					Jobs: []Job{{
 						ID:    "job-1",
 						Topic: "test-topic",
 						Data:  []byte("test-data"),
-					},
+					}},
 				},
 			},
 			want: &ProxyRequest{
 				RequestID: "req-789",
-				Type:      ReqAddJob,
-				AddJob: &AddJobPayload{
-					Job: Job{
+				Type:      ReqAddJobs,
+				AddJobs: &AddJobsPayload{
+					Topic: "test-topic",
+					Jobs: []Job{{
 						ID:    "job-1",
 						Topic: "test-topic",
 						Data:  []byte("test-data"),
-					},
+					}},
 				},
 			},
 		},

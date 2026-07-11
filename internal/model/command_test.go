@@ -53,7 +53,7 @@ func TestCommandType_String(t *testing.T) {
 		},
 		{
 			name: "CmdAddJob",
-			ct:   CmdAddJob,
+			ct:   CmdAddJobs,
 			want: "CmdAddJob",
 		},
 		{
@@ -101,8 +101,8 @@ func TestCommandConstants(t *testing.T) {
 	if CmdTransferLeader != 3 {
 		t.Errorf("CmdTransferLeader = %v, want 3", CmdTransferLeader)
 	}
-	if CmdAddJob != 4 {
-		t.Errorf("CmdAddJob = %v, want 4", CmdAddJob)
+	if CmdAddJobs != 4 {
+		t.Errorf("CmdAddJob = %v, want 4", CmdAddJobs)
 	}
 	if CmdDone != 5 {
 		t.Errorf("CmdDone = %v, want 5", CmdDone)
@@ -212,9 +212,9 @@ func TestCommandMarshalMsgpack_ErrorCases(t *testing.T) {
 		{
 			name: "CmdAddJob with nil payload",
 			command: Command{
-				Type:      CmdAddJob,
+				Type:      CmdAddJobs,
 				ProposeID: 1,
-				AddJob:    nil,
+				AddJobs:   nil,
 			},
 			wantErr: true,
 			errMsg:  "add_job payload missing",
@@ -298,7 +298,7 @@ func TestCommandUnmarshalMsgpack_ErrorCases(t *testing.T) {
 		},
 		{
 			name:    "Invalid payload for CmdAddJob",
-			data:    mustMarshal([3]any{uint8(CmdAddJob), uint64(1), "invalid"}),
+			data:    mustMarshal([3]any{uint8(CmdAddJobs), uint64(1), "invalid"}),
 			wantErr: true,
 		},
 		{
@@ -438,14 +438,15 @@ func TestCommandMarshalUnmarshal_Integration(t *testing.T) {
 		{
 			name: "Full CmdAddJob",
 			cmd: Command{
-				Type:      CmdAddJob,
+				Type:      CmdAddJobs,
 				ProposeID: 500,
-				AddJob: &AddJobPayload{
-					Job: Job{
+				AddJobs: &AddJobsPayload{
+					Topic: "production-topic",
+					Jobs: []Job{{
 						ID:    "job-2026-001",
 						Topic: "production-topic",
 						Data:  []byte("{\"key\":\"value\",\"timestamp\":1700000000}"),
-					},
+					}},
 				},
 			},
 		},
@@ -532,14 +533,15 @@ func TestCommandUnmarshalMsgpack_InvalidArrayStructure(t *testing.T) {
 func TestCommand_MsgpackCompatibility(t *testing.T) {
 	// Test that the custom marshaler works with standard msgpack
 	original := Command{
-		Type:      CmdAddJob,
+		Type:      CmdAddJobs,
 		ProposeID: 888,
-		AddJob: &AddJobPayload{
-			Job: Job{
+		AddJobs: &AddJobsPayload{
+			Topic: "compat-topic",
+			Jobs: []Job{{
 				ID:    "compat-job",
 				Topic: "compat-topic",
 				Data:  []byte("compat-data"),
-			},
+			}},
 		},
 	}
 
@@ -648,14 +650,15 @@ func TestCommandMarshalMsgpack_NilCommand(t *testing.T) {
 
 func BenchmarkCommandMarshalMsgpack(b *testing.B) {
 	cmd := Command{
-		Type:      CmdAddJob,
+		Type:      CmdAddJobs,
 		ProposeID: 12345,
-		AddJob: &AddJobPayload{
-			Job: Job{
+		AddJobs: &AddJobsPayload{
+			Topic: "bench-topic",
+			Jobs: []Job{{
 				ID:    "bench-job",
 				Topic: "bench-topic",
 				Data:  []byte("bench-data"),
-			},
+			}},
 		},
 	}
 	b.ResetTimer()
@@ -666,14 +669,15 @@ func BenchmarkCommandMarshalMsgpack(b *testing.B) {
 
 func BenchmarkCommandUnmarshalMsgpack(b *testing.B) {
 	cmd := Command{
-		Type:      CmdAddJob,
+		Type:      CmdAddJobs,
 		ProposeID: 12345,
-		AddJob: &AddJobPayload{
-			Job: Job{
+		AddJobs: &AddJobsPayload{
+			Topic: "bench-topic",
+			Jobs: []Job{{
 				ID:    "bench-job",
 				Topic: "bench-topic",
 				Data:  []byte("bench-data"),
-			},
+			}},
 		},
 	}
 	data, _ := cmd.MarshalMsgpack()
@@ -685,7 +689,7 @@ func BenchmarkCommandUnmarshalMsgpack(b *testing.B) {
 }
 
 func BenchmarkCommandType_String(b *testing.B) {
-	ct := CmdAddJob
+	ct := CmdAddJobs
 	for i := 0; i < b.N; i++ {
 		_ = ct.String()
 	}
@@ -751,12 +755,12 @@ func verifyCommand(t *testing.T, expected, actual Command) {
 			t.Errorf("TargetNodeID mismatch: got %s, want %s", actual.Transfer.TargetNodeID, expected.Transfer.TargetNodeID)
 		}
 
-	case CmdAddJob:
-		if actual.AddJob == nil {
+	case CmdAddJobs:
+		if actual.AddJobs == nil {
 			t.Error("AddJob is nil")
 		} else {
-			expectedJob := expected.AddJob.Job
-			actualJob := actual.AddJob.Job
+			expectedJob := expected.AddJobs.Jobs[0]
+			actualJob := actual.AddJobs.Jobs[0]
 			if expectedJob.ID != actualJob.ID {
 				t.Errorf("Job.ID mismatch: got %s, want %s", actualJob.ID, expectedJob.ID)
 			}

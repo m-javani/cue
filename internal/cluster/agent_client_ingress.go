@@ -112,7 +112,7 @@ func (a *ClusterAgent) processCommand(cmd model.Command) {
 			}
 		}
 
-	case model.CmdAddJob, model.CmdDone, model.CmdDrop:
+	case model.CmdAddJobs, model.CmdDone, model.CmdDrop:
 		// Check if node is active (leader or follower)
 		if !a.IsActive() {
 			if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {

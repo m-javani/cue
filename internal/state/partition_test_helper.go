@@ -235,13 +235,14 @@ func (t *PartitionTester) SetStatus(s model.ClusterNodeStatus) {
 func (t *PartitionTester) AddJob(jobID string, data []byte) {
 	respCh := make(chan model.ToProducerResponse, 1)
 	cmd := model.Command{
-		Type: model.CmdAddJob,
-		AddJob: &model.AddJobPayload{
-			Job: model.Job{
+		Type: model.CmdAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: t.topic,
+			Jobs: []model.Job{{
 				ID:    jobID,
 				Topic: t.topic,
 				Data:  data,
-			},
+			}},
 		},
 		RespInfo: &model.RespInfo{
 			RequestID: jobID,
@@ -266,13 +267,14 @@ func (t *PartitionTester) AddJob(jobID string, data []byte) {
 func (t *PartitionTester) AddJobAsync(jobID string, data []byte) {
 	respCh := make(chan model.ToProducerResponse, 1)
 	cmd := model.Command{
-		Type: model.CmdAddJob,
-		AddJob: &model.AddJobPayload{
-			Job: model.Job{
+		Type: model.CmdAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: t.topic,
+			Jobs: []model.Job{{
 				ID:    jobID,
 				Topic: t.topic,
 				Data:  data,
-			},
+			}},
 		},
 		RespInfo: &model.RespInfo{
 			RequestID: jobID,
