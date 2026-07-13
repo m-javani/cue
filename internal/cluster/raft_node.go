@@ -26,6 +26,7 @@ import (
 	"go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 // ========== Configuration ==========
@@ -109,9 +110,9 @@ type CRaft struct {
 
 	// Channels (provided by ClusterAgent)
 	proposeCh  <-chan ProposeRequest
-	stepCh     <-chan raftpb.Message
+	stepCh     <-chan *raftpb.Message
 	commitCh   chan<- CommittedEntry
-	outgoingCh chan<- raftpb.Message
+	outgoingCh chan<- *raftpb.Message
 	ctrlCh     <-chan ControlCmd
 	notifyCh   chan<- NotifyEvent
 
@@ -138,9 +139,9 @@ func NewCRaft(
 	cfg Config,
 	storage *RaftStorage,
 	proposeCh <-chan ProposeRequest,
-	stepCh <-chan raftpb.Message,
+	stepCh <-chan *raftpb.Message,
 	commitCh chan<- CommittedEntry,
-	outgoingCh chan<- raftpb.Message,
+	outgoingCh chan<- *raftpb.Message,
 	ctrlCh <-chan ControlCmd,
 	notifyCh chan<- NotifyEvent,
 	logger *zap.Logger,
@@ -148,15 +149,16 @@ func NewCRaft(
 ) (*CRaft, error) {
 
 	raftConfig := &raft.Config{
-		ID:              cfg.ID,
-		ElectionTick:    cfg.ElectionTick,
-		HeartbeatTick:   cfg.HeartbeatTick,
-		Storage:         storage,
-		MaxSizePerMsg:   cfg.MaxSizePerMsg,
-		MaxInflightMsgs: cfg.MaxInflightMsgs,
-		PreVote:         true,
-		CheckQuorum:     true,
-		Logger:          utils.NewRaftZapLogger(logger),
+		ID:                        cfg.ID,
+		ElectionTick:              cfg.ElectionTick,
+		HeartbeatTick:             cfg.HeartbeatTick,
+		Storage:                   storage,
+		MaxSizePerMsg:             cfg.MaxSizePerMsg,
+		MaxInflightMsgs:           cfg.MaxInflightMsgs,
+		PreVote:                   true,
+		CheckQuorum:               true,
+		DisableProposalForwarding: true,
+		Logger:                    utils.NewRaftZapLogger(logger),
 	}
 
 	// Create RawNode (gives you the Ready() API )
@@ -208,13 +210,10 @@ func (c *CRaft) runLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	logger := c.logger.With(zap.Uint64("node_id", c.cfg.ID))
-	// logger.Info("CRaft node started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			// logger.Info("CRaft node stopping",
-			// 	zap.String("node_id", c.nodeID))
 			c.Stop()
 			return
 
@@ -267,7 +266,7 @@ func (c *CRaft) handleReady(ctx context.Context) error {
 	currentRole := currentStatus.RaftState
 	currentLeaderID := currentStatus.Lead
 	if currentRole != c.prevRole || currentLeaderID != c.prevLeaderID {
-		currentTerm := currentStatus.Term
+		currentTerm := currentStatus.GetTerm()
 		select {
 		case c.notifyCh <- NotifyEvent{
 			Type:     EventRoleChange,
@@ -292,12 +291,12 @@ func (c *CRaft) handleReady(ctx context.Context) error {
 		// Apply snapshot to storage (updates metadata, truncates WAL)
 		if err := c.storage.InstallSnapshot(snap.Metadata); err != nil {
 			c.raftMu.Lock()
-			c.node.ReportSnapshot(snap.Metadata.Index, raft.SnapshotFailure)
+			c.node.ReportSnapshot(snap.Metadata.GetIndex(), raft.SnapshotFailure)
 			c.raftMu.Unlock()
 			return fmt.Errorf("failed to apply snapshot: %w", err)
 		}
 		c.raftMu.Lock()
-		c.node.ReportSnapshot(snap.Metadata.Index, raft.SnapshotFinish)
+		c.node.ReportSnapshot(snap.Metadata.GetIndex(), raft.SnapshotFinish)
 		c.raftMu.Unlock()
 	}
 
@@ -314,7 +313,6 @@ func (c *CRaft) handleReady(ctx context.Context) error {
 			return fmt.Errorf("failed to append entries: %w", err)
 		}
 	}
-
 	// 5. Send messages to peers (via ClusterAgent's QUIC)
 	for _, msg := range rd.Messages {
 		select {
@@ -336,13 +334,13 @@ func (c *CRaft) handleReady(ctx context.Context) error {
 }
 
 // ========== Apply Committed Entry ==========
-func (c *CRaft) applyCommittedEntry(entry raftpb.Entry) {
+func (c *CRaft) applyCommittedEntry(entry *raftpb.Entry) {
 	confUpdated := false
-	switch entry.Type {
+	switch entry.GetType() {
 	case raftpb.EntryConfChangeV2:
 		confUpdated = true
-		var cc raftpb.ConfChangeV2
-		if err := cc.Unmarshal(entry.Data); err != nil {
+		cc := &raftpb.ConfChangeV2{}
+		if err := proto.Unmarshal(entry.Data, cc); err != nil {
 			c.logger.Error("unmarshal v2 failed", zap.Error(err))
 			return
 		}
@@ -350,21 +348,24 @@ func (c *CRaft) applyCommittedEntry(entry raftpb.Entry) {
 
 	case raftpb.EntryConfChange:
 		confUpdated = true
-		var cc raftpb.ConfChange
-		if err := cc.Unmarshal(entry.Data); err != nil {
+		cc := raftpb.ConfChange{}
+		if err := proto.Unmarshal(entry.GetData(), &cc); err != nil {
 			c.logger.Error("unmarshal v1 failed", zap.Error(err))
 			return
 		}
-		c.handleConfChange([]raftpb.ConfChangeSingle{{
-			Type:   cc.Type,
-			NodeID: cc.NodeID,
+		changeType := cc.GetType()
+		nodeID := cc.GetNodeId()
+		c.handleConfChange([]*raftpb.ConfChangeSingle{{
+			Type:   &changeType,
+			NodeId: &nodeID,
 		}})
+
 	}
 
 	if err := c.storage.AppendCommitted(entry); err != nil {
 		c.logger.Error("failed to persist commited entry",
-			zap.Uint64("index", entry.Index),
-			zap.Uint64("term", entry.Term))
+			zap.Uint64("index", entry.GetIndex()),
+			zap.Uint64("term", entry.GetTerm()))
 		c.cancel()
 	}
 
@@ -389,32 +390,32 @@ func (c *CRaft) applyCommittedEntry(entry raftpb.Entry) {
 	select {
 	case c.commitCh <- CommittedEntry{
 		Data:     entry.Data,
-		Index:    entry.Index,
-		Term:     entry.Term,
-		Type:     entry.Type,
+		Index:    entry.GetIndex(),
+		Term:     entry.GetTerm(),
+		Type:     entry.GetType(),
 		Voters:   voterIDs,
 		Learners: learnerIDs,
 	}:
 	default:
 		c.logger.Warn("commit channel full, dropping entry",
-			zap.Uint64("index", entry.Index),
-			zap.Uint64("term", entry.Term))
+			zap.Uint64("index", entry.GetIndex()),
+			zap.Uint64("term", entry.GetTerm()))
 	}
 }
 
-func (c *CRaft) handleConfChange(changes []raftpb.ConfChangeSingle) {
+func (c *CRaft) handleConfChange(changes []*raftpb.ConfChangeSingle) {
 	// Apply first
 	var cc raftpb.ConfChangeV2
 	cc.Changes = changes
 	c.raftMu.Lock()
-	cs := c.node.ApplyConfChange(cc)
+	cs := c.node.ApplyConfChange(&cc)
 	c.raftMu.Unlock()
 
 	c.logger.Info("raft conf changed",
 		zap.Any("conf_state", cs),
 		zap.String("changes", raftpb.ConfChangesToString(changes)))
 
-	if err := c.storage.core.setConfState(*cs); err != nil {
+	if err := c.storage.core.setConfState(cs); err != nil {
 		c.logger.Error("failed to persist conf state", zap.Error(err))
 	}
 
@@ -450,53 +451,61 @@ func (c *CRaft) handlePropose(req ProposeRequest) {
 }
 
 // ========== Handle Control Commands ==========
-
 func (c *CRaft) handleControl(cmd ControlCmd) {
 	switch cmd.Type {
 	case CmdAddNode:
+		transition := raftpb.ConfChangeTransitionAuto
+		changeType := raftpb.ConfChangeAddNode
+		nodeID := cmd.NodeID
 		cc := raftpb.ConfChangeV2{
-			Transition: raftpb.ConfChangeTransitionAuto,
-			Changes: []raftpb.ConfChangeSingle{
+			Transition: &transition,
+			Changes: []*raftpb.ConfChangeSingle{
 				{
-					Type:   raftpb.ConfChangeAddNode,
-					NodeID: cmd.NodeID,
+					Type:   &changeType,
+					NodeId: &nodeID,
 				},
 			},
 		}
 		c.raftMu.Lock()
-		if err := c.node.ProposeConfChange(cc); err != nil {
+		if err := c.node.ProposeConfChange(&cc); err != nil {
 			c.logger.Error("failed to add node", zap.Uint64("node_id", cmd.NodeID), zap.Error(err))
 		}
 		c.raftMu.Unlock()
 
 	case CmdAddLearner:
+		transition := raftpb.ConfChangeTransitionAuto
+		changeType := raftpb.ConfChangeAddLearnerNode
+		nodeID := cmd.NodeID
 		cc := raftpb.ConfChangeV2{
-			Transition: raftpb.ConfChangeTransitionAuto,
-			Changes: []raftpb.ConfChangeSingle{
+			Transition: &transition,
+			Changes: []*raftpb.ConfChangeSingle{
 				{
-					Type:   raftpb.ConfChangeAddLearnerNode,
-					NodeID: cmd.NodeID,
+					Type:   &changeType,
+					NodeId: &nodeID,
 				},
 			},
 		}
 		c.raftMu.Lock()
-		if err := c.node.ProposeConfChange(cc); err != nil {
+		if err := c.node.ProposeConfChange(&cc); err != nil {
 			c.logger.Error("failed to add learner", zap.Uint64("node_id", cmd.NodeID), zap.Error(err))
 		}
 		c.raftMu.Unlock()
 
 	case CmdRemoveNode:
+		transition := raftpb.ConfChangeTransitionAuto
+		changeType := raftpb.ConfChangeRemoveNode
+		nodeID := cmd.NodeID
 		cc := raftpb.ConfChangeV2{
-			Transition: raftpb.ConfChangeTransitionAuto,
-			Changes: []raftpb.ConfChangeSingle{
+			Transition: &transition,
+			Changes: []*raftpb.ConfChangeSingle{
 				{
-					Type:   raftpb.ConfChangeRemoveNode,
-					NodeID: cmd.NodeID,
+					Type:   &changeType,
+					NodeId: &nodeID,
 				},
 			},
 		}
 		c.raftMu.Lock()
-		if err := c.node.ProposeConfChange(cc); err != nil {
+		if err := c.node.ProposeConfChange(&cc); err != nil {
 			c.logger.Error("failed to remove node", zap.Uint64("node_id", cmd.NodeID), zap.Error(err))
 		}
 		c.raftMu.Unlock()
@@ -516,12 +525,12 @@ func (c *CRaft) handleControl(cmd ControlCmd) {
 		select {
 		case c.notifyCh <- NotifyEvent{
 			Type:          WalCompact,
-			SnapshotIndex: c.storage.core.snapshotMeta.Index,
+			SnapshotIndex: c.storage.core.snapshotMeta.GetIndex(),
 		}:
 		default:
 			c.logger.Warn("notify channel full, dropping notification",
 				zap.Int("type", int(WalCompact)),
-				zap.Uint64("WalCompactIndex", c.storage.core.snapshotMeta.Index))
+				zap.Uint64("WalCompactIndex", c.storage.core.snapshotMeta.GetIndex()))
 		}
 
 		c.logger.Info("STORAGE INDEXES",
@@ -557,17 +566,19 @@ func (c *CRaft) handleControl(cmd ControlCmd) {
 				continue
 			}
 
+			transition := raftpb.ConfChangeTransitionAuto
+			changeType := raftpb.ConfChangeAddLearnerNode
 			cc := raftpb.ConfChangeV2{
-				Transition: raftpb.ConfChangeTransitionAuto,
-				Changes: []raftpb.ConfChangeSingle{
+				Transition: &transition,
+				Changes: []*raftpb.ConfChangeSingle{
 					{
-						Type:   raftpb.ConfChangeAddLearnerNode,
-						NodeID: nodeID,
+						Type:   &changeType,
+						NodeId: &nodeID,
 					},
 				},
 			}
 			c.raftMu.Lock()
-			if err := c.node.ProposeConfChange(cc); err != nil {
+			if err := c.node.ProposeConfChange(&cc); err != nil {
 				c.logger.Error("failed to add learner node",
 					zap.Uint64("node_id", nodeID),
 					zap.Error(err))

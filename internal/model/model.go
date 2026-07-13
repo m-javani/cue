@@ -155,7 +155,7 @@ type ProxyRequestType uint8
 const (
 	ReqHeartbeatReport ProxyRequestType = iota
 	ReqAddTopic
-	ReqAddJob
+	ReqAddJobs
 	ReqDone
 )
 
@@ -165,8 +165,8 @@ func (t ProxyRequestType) String() string {
 		return "ReqHeartbeatReport"
 	case ReqAddTopic:
 		return "ReqAddTopic"
-	case ReqAddJob:
-		return "ReqAddJob"
+	case ReqAddJobs:
+		return "ReqAddJobs"
 	case ReqDone:
 		return "ReqDone"
 	default:
@@ -176,12 +176,12 @@ func (t ProxyRequestType) String() string {
 
 // ProxyRequest from proxy (inbound)
 type ProxyRequest struct {
-	RequestID string           `msgpack:"request_id"`
+	RequestID uint32           `msgpack:"request_id"`
 	Type      ProxyRequestType `msgpack:"type"`
 
 	AddTopic        *AddTopicPayload `msgpack:"add_topic,omitempty"`
 	HeartbeatReport *HeartbeatReport `msgpack:"heartbeat_report,omitempty"`
-	AddJob          *AddJobPayload   `msgpack:"add_job,omitempty"`
+	AddJobs         *AddJobsPayload  `msgpack:"add_job,omitempty"`
 	Done            *DonePayload     `msgpack:"done,omitempty"`
 }
 
@@ -219,14 +219,6 @@ type ToProxyMessage struct {
 	Heartbeat *ToProxyHeartbeat   `msgpack:"heartbeat,omitempty"`
 }
 
-type ToProducerRespStatus string
-
-const (
-	ToProxyRespStatusSuccess ToProducerRespStatus = "success"
-	ToProxyRespStatusError   ToProducerRespStatus = "error"
-	ToProxyRespStatusExist   ToProducerRespStatus = "exist"
-)
-
 // to gateway
 type ToGatewayMessageType string
 
@@ -249,11 +241,30 @@ type ToGatewayMessage struct {
 	LoopbackMessage *ToProducerResponse
 }
 
+type ToProducerRespStatus string
+
+const (
+	ToProxyRespStatusSuccess ToProducerRespStatus = "success"
+	ToProxyRespStatusError   ToProducerRespStatus = "error"
+)
+
+const (
+	FailDuplicate int = 1
+	FailQueueFull int = 2
+	FailInternal  int = 3
+)
+
 // ToProducerResponse to proxy (outbound)
+type JobFailure struct {
+	JobID  string `json:"job_id"`
+	Reason int    `json:"reason"`
+}
+
 type ToProducerResponse struct {
-	RequestID string               `msgpack:"request_id"`
-	Status    ToProducerRespStatus `msgpack:"status"`
-	Error     string               `msgpack:"error,omitempty"`
+	RequestID uint32               `json:"request_id"`
+	Status    ToProducerRespStatus `json:"status"`
+	Error     string               `json:"error"`
+	Failures  []JobFailure         `json:"failures,omitempty"`
 }
 
 type PartitionHeartbeat struct {

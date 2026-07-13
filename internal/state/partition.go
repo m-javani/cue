@@ -201,8 +201,8 @@ func (p *Partition) handleCommand(cmd model.Command) {
 	}()
 
 	switch cmd.Type {
-	case model.CmdAddJob:
-		p.handleAddJob(cmd)
+	case model.CmdAddJobs:
+		p.handleAddJobs(cmd)
 	case model.CmdDone:
 		p.handleDone(cmd)
 	case model.CmdDrop:
@@ -222,82 +222,98 @@ func (p *Partition) handleCommand(cmd model.Command) {
 	}
 }
 
-func (p *Partition) handleAddJob(cmd model.Command) {
-	if cmd.AddJob == nil {
-		if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
-			res := model.ToProducerResponse{
-				RequestID: cmd.RespInfo.RequestID,
-				Status:    model.ToProxyRespStatusError,
-				Error:     internal.ErrInvalidPayload.Error(),
-			}
-			select {
-			case cmd.RespInfo.RespCh <- res:
-			default:
-			}
-		}
+// handleAddJobs now supports partial success + silently skips duplicates
+func (p *Partition) handleAddJobs(cmd model.Command) {
+	if cmd.AddJobs == nil {
+		p.sendErrorResponse(cmd, "invalid payload")
 		return
 	}
 
-	job := &cmd.AddJob.Job
-	if job.CreatedAt == 0 {
-		job.CreatedAt = nowMilli()
-	}
+	var failures []model.JobFailure
 
-	// Create job in JobStore
-	idx, err := p.jobStore.Create(job)
-	if err != nil {
-		if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
-			res := model.ToProducerResponse{
-				RequestID: cmd.RespInfo.RequestID,
-				Status:    model.ToProxyRespStatusError,
-				Error:     err.Error(),
-			}
-			select {
-			case cmd.RespInfo.RespCh <- res:
-			default:
-			}
+	for _, job := range cmd.AddJobs.Jobs {
+		if job.Done {
+			continue
 		}
-		return
-	}
-
-	// Push to DispatchQueue
-	dispatchRef := JobRef{
-		Index:      int(idx),
-		RetryCount: 0,
-		DueTimeSec: p.processQueue.currentSec(),
-	}
-	if err := p.processQueue.AddNewJob(dispatchRef); err != nil {
-		// DispatchQueue is full - release job and return error
-		p.jobStore.Release(idx)
-		if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
-			res := model.ToProducerResponse{
-				RequestID: cmd.RespInfo.RequestID,
-				Status:    model.ToProxyRespStatusError,
-				Error:     "que is full",
-			}
-			select {
-			case cmd.RespInfo.RespCh <- res:
-			default:
-			}
+		if job.CreatedAt == 0 {
+			job.CreatedAt = nowMilli()
 		}
-		return
+
+		// Create job in JobStore - silently ignore duplicates
+		idx, err := p.jobStore.Create(&job)
+		if err != nil {
+			if err == internal.ErrDuplicateJobID {
+				// Silently ignore duplicate (idempotent)
+				continue
+			}
+			// Other error (rare)
+			failures = append(failures, model.JobFailure{
+				JobID:  job.ID,
+				Reason: model.FailInternal,
+			})
+			continue // continue with other jobs
+		}
+
+		// Push to DispatchQueue
+		dispatchRef := JobRef{
+			Index:      int(idx),
+			RetryCount: 0,
+			DueTimeSec: p.processQueue.currentSec(),
+		}
+
+		if err := p.processQueue.AddNewJob(dispatchRef); err != nil {
+			// Queue full - release the job we just created
+			p.jobStore.Release(idx)
+			failures = append(failures, model.JobFailure{
+				JobID:  job.ID,
+				Reason: model.FailQueueFull,
+			})
+			continue // continue with remaining jobs
+		}
+
+		p.metrics.JobAdded(p.topic, 1)
 	}
 
-	// Success
+	// Send response
+	if cmd.RespInfo != nil {
+		resp := model.ToProducerResponse{
+			RequestID: cmd.RespInfo.RequestID,
+		}
+
+		if len(failures) == 0 {
+			resp.Status = model.ToProxyRespStatusSuccess
+		} else {
+			resp.Status = model.ToProxyRespStatusError
+			resp.Failures = failures
+		}
+
+		p.sendResponse(cmd, resp)
+	}
+
+}
+
+// Helper methods
+func (p *Partition) sendErrorResponse(cmd model.Command, errMsg string) {
 	if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
 		res := model.ToProducerResponse{
 			RequestID: cmd.RespInfo.RequestID,
-			Status:    model.ToProxyRespStatusSuccess,
-			Error:     "",
+			Status:    model.ToProxyRespStatusError,
+			Error:     errMsg,
 		}
 		select {
 		case cmd.RespInfo.RespCh <- res:
 		default:
 		}
 	}
+}
 
-	p.metrics.JobAdded(p.topic, 1)
-	p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
+func (p *Partition) sendResponse(cmd model.Command, resp model.ToProducerResponse) {
+	if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
+		select {
+		case cmd.RespInfo.RespCh <- resp:
+		default:
+		}
+	}
 }
 
 func (p *Partition) handleDone(cmd model.Command) {
@@ -319,6 +335,7 @@ func (p *Partition) handleDone(cmd model.Command) {
 	for _, jobID := range cmd.Done.JobIDs {
 		p.jobStore.MarkDone(jobID)
 	}
+	p.metrics.JobCompleted(p.topic, uint64(len(cmd.Done.JobIDs)))
 
 	if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
 		res := model.ToProducerResponse{
@@ -331,8 +348,6 @@ func (p *Partition) handleDone(cmd model.Command) {
 		default:
 		}
 	}
-
-	p.metrics.JobCompleted(p.topic, 1)
 }
 
 func (p *Partition) handleDrop(cmd model.Command) {
@@ -425,6 +440,8 @@ func (p *Partition) sendToDLQ(jobRef JobRef, job *model.Job) {
 // It processes due jobs in order: Done → Expired/MaxRetries → Send to proxy
 // dispatch sends jobs to available proxies and handles job lifecycle
 func (p *Partition) dispatch() {
+	defer p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
+
 	if p.getStatus() != model.NodeStatusLeaderActive || len(p.proxyMap.available) == 0 {
 		return
 	}
@@ -455,7 +472,6 @@ func (p *Partition) dispatch() {
 	nowSec := time.Now().Unix()
 	items := p.processQueue.ReadBatch(batchSize, nowSec, &batchPool)
 	if len(items) == 0 {
-		p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 		return
 	}
 
@@ -468,9 +484,6 @@ func (p *Partition) dispatch() {
 		job := p.jobStore.Get(uint32(item.Index))
 		if job == nil || job.Done {
 			removeCells = append(removeCells, item)
-			if job.Done {
-				p.metrics.JobCompleted(p.topic, 1)
-			}
 			continue
 		}
 
@@ -499,7 +512,6 @@ func (p *Partition) dispatch() {
 		p.processQueue.RemoveCells(removeCells)
 		//nolint:staticcheck
 		removeRefsPool.Put(removeCells[:0])
-		p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 		return
 	}
 
@@ -525,7 +537,6 @@ func (p *Partition) dispatch() {
 		p.processQueue.RemoveCells(removeCells)
 		//nolint:staticcheck
 		removeRefsPool.Put(removeCells[:0])
-		p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 		return
 	}
 
@@ -562,8 +573,6 @@ func (p *Partition) dispatch() {
 	validRefsPool.Put(validRefs[:0])
 	//nolint:staticcheck
 	removeRefsPool.Put(removeCells[:0])
-
-	p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
 }
 
 // flushDLQIfNeeded proposes drops when buffer thresholds are met

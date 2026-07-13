@@ -22,7 +22,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -474,12 +473,7 @@ func TestNextRequestID(t *testing.T) {
 	id2 := api.nextRequestID()
 
 	if id1 == id2 {
-		t.Errorf("IDs should be unique, got %s and %s", id1, id2)
-	}
-
-	// Verify it's a valid base36 string
-	if _, err := strconv.ParseUint(id1, 36, 64); err != nil {
-		t.Errorf("Invalid base36 string: %v", err)
+		t.Errorf("IDs should be unique, got %d and %d", id1, id2)
 	}
 }
 

@@ -38,9 +38,9 @@ func TestProxyRequestType_String(t *testing.T) {
 			want: "ReqAddTopic",
 		},
 		{
-			name: "ReqAddJob",
-			t:    ReqAddJob,
-			want: "ReqAddJob",
+			name: "ReqAddJobs",
+			t:    ReqAddJobs,
+			want: "ReqAddJobs",
 		},
 		{
 			name: "ReqDone",
@@ -76,8 +76,8 @@ func TestProxyRequestTypeConstants(t *testing.T) {
 	if ReqAddTopic != 1 {
 		t.Errorf("ReqAddTopic = %v, want 1", ReqAddTopic)
 	}
-	if ReqAddJob != 2 {
-		t.Errorf("ReqAddJob = %v, want 2", ReqAddJob)
+	if ReqAddJobs != 2 {
+		t.Errorf("ReqAddJobs = %v, want 2", ReqAddJobs)
 	}
 	if ReqDone != 3 {
 		t.Errorf("ReqDone = %v, want 3", ReqDone)
@@ -103,9 +103,6 @@ func TestToProducerRespStatusConstants(t *testing.T) {
 	if ToProxyRespStatusError != "error" {
 		t.Errorf("ToProxyRespStatusError = %v, want error", ToProxyRespStatusError)
 	}
-	if ToProxyRespStatusExist != "exist" {
-		t.Errorf("ToProxyRespStatusExist = %v, want exist", ToProxyRespStatusExist)
-	}
 }
 
 func TestToGatewayMessageTypeConstants(t *testing.T) {
@@ -129,7 +126,7 @@ func TestProxyRequest(t *testing.T) {
 		{
 			name: "Full ProxyRequest with all fields",
 			request: &ProxyRequest{
-				RequestID: "req-123",
+				RequestID: 123,
 				Type:      ReqAddTopic,
 				AddTopic: &AddTopicPayload{
 					Topic: "test-topic",
@@ -142,7 +139,7 @@ func TestProxyRequest(t *testing.T) {
 						{Topic: "topic2", ConsumptionScore: 200},
 					},
 				},
-				AddJob: &AddJobPayload{
+				AddJobs: &AddJobsPayload{
 					// AddJobPayload fields would be defined here
 				},
 				Done: &DonePayload{
@@ -150,7 +147,7 @@ func TestProxyRequest(t *testing.T) {
 				},
 			},
 			want: &ProxyRequest{
-				RequestID: "req-123",
+				RequestID: 123,
 				Type:      ReqAddTopic,
 				AddTopic: &AddTopicPayload{
 					Topic: "test-topic",
@@ -163,50 +160,52 @@ func TestProxyRequest(t *testing.T) {
 						{Topic: "topic2", ConsumptionScore: 200},
 					},
 				},
-				AddJob: &AddJobPayload{},
-				Done:   &DonePayload{},
+				AddJobs: &AddJobsPayload{},
+				Done:    &DonePayload{},
 			},
 		},
 		{
 			name: "Minimal ProxyRequest",
 			request: &ProxyRequest{
-				RequestID: "req-456",
+				RequestID: 456,
 				Type:      ReqDone,
 			},
 			want: &ProxyRequest{
-				RequestID: "req-456",
+				RequestID: 456,
 				Type:      ReqDone,
 			},
 		},
 		{
 			name: "ProxyRequest with only AddJob",
 			request: &ProxyRequest{
-				RequestID: "req-789",
-				Type:      ReqAddJob,
-				AddJob: &AddJobPayload{
-					Job: Job{
+				RequestID: 789,
+				Type:      ReqAddJobs,
+				AddJobs: &AddJobsPayload{
+					Topic: "test-topic",
+					Jobs: []Job{{
 						ID:    "job-1",
 						Topic: "test-topic",
 						Data:  []byte("test-data"),
-					},
+					}},
 				},
 			},
 			want: &ProxyRequest{
-				RequestID: "req-789",
-				Type:      ReqAddJob,
-				AddJob: &AddJobPayload{
-					Job: Job{
+				RequestID: 789,
+				Type:      ReqAddJobs,
+				AddJobs: &AddJobsPayload{
+					Topic: "test-topic",
+					Jobs: []Job{{
 						ID:    "job-1",
 						Topic: "test-topic",
 						Data:  []byte("test-data"),
-					},
+					}},
 				},
 			},
 		},
 		{
 			name: "ProxyRequest with only Done",
 			request: &ProxyRequest{
-				RequestID: "req-101",
+				RequestID: 101,
 				Type:      ReqDone,
 				Done: &DonePayload{
 					Topic:  "test-topic",
@@ -214,7 +213,7 @@ func TestProxyRequest(t *testing.T) {
 				},
 			},
 			want: &ProxyRequest{
-				RequestID: "req-101",
+				RequestID: 101,
 				Type:      ReqDone,
 				Done: &DonePayload{
 					Topic:  "test-topic",
@@ -225,7 +224,7 @@ func TestProxyRequest(t *testing.T) {
 		{
 			name: "ProxyRequest with HeartbeatReport only",
 			request: &ProxyRequest{
-				RequestID: "req-202",
+				RequestID: 202,
 				Type:      ReqHeartbeatReport,
 				HeartbeatReport: &HeartbeatReport{
 					ProxyID:   "proxy-2",
@@ -236,7 +235,7 @@ func TestProxyRequest(t *testing.T) {
 				},
 			},
 			want: &ProxyRequest{
-				RequestID: "req-202",
+				RequestID: 202,
 				Type:      ReqHeartbeatReport,
 				HeartbeatReport: &HeartbeatReport{
 					ProxyID:   "proxy-2",
@@ -318,7 +317,7 @@ func TestToProxyMessage(t *testing.T) {
 			message: &ToProxyMessage{
 				Type: ProxyMessageResponse,
 				Response: &ToProducerResponse{
-					RequestID: "req-123",
+					RequestID: 123,
 					Status:    ToProxyRespStatusSuccess,
 					Error:     "",
 				},
@@ -326,7 +325,7 @@ func TestToProxyMessage(t *testing.T) {
 			want: &ToProxyMessage{
 				Type: ProxyMessageResponse,
 				Response: &ToProducerResponse{
-					RequestID: "req-123",
+					RequestID: 123,
 					Status:    ToProxyRespStatusSuccess,
 					Error:     "",
 				},
@@ -394,12 +393,12 @@ func TestToProducerResponse(t *testing.T) {
 		{
 			name: "Success response",
 			response: &ToProducerResponse{
-				RequestID: "req-123",
+				RequestID: 123,
 				Status:    ToProxyRespStatusSuccess,
 				Error:     "",
 			},
 			want: &ToProducerResponse{
-				RequestID: "req-123",
+				RequestID: 123,
 				Status:    ToProxyRespStatusSuccess,
 				Error:     "",
 			},
@@ -407,27 +406,14 @@ func TestToProducerResponse(t *testing.T) {
 		{
 			name: "Error response",
 			response: &ToProducerResponse{
-				RequestID: "req-456",
+				RequestID: 456,
 				Status:    ToProxyRespStatusError,
 				Error:     "something went wrong",
 			},
 			want: &ToProducerResponse{
-				RequestID: "req-456",
+				RequestID: 456,
 				Status:    ToProxyRespStatusError,
 				Error:     "something went wrong",
-			},
-		},
-		{
-			name: "Exist response",
-			response: &ToProducerResponse{
-				RequestID: "req-789",
-				Status:    ToProxyRespStatusExist,
-				Error:     "already exists",
-			},
-			want: &ToProducerResponse{
-				RequestID: "req-789",
-				Status:    ToProxyRespStatusExist,
-				Error:     "already exists",
 			},
 		},
 	}
@@ -770,7 +756,7 @@ func TestToGatewayMessage(t *testing.T) {
 			message: &ToGatewayMessage{
 				Type: ToGatewayMessageLoopback,
 				LoopbackMessage: &ToProducerResponse{
-					RequestID: "req-123",
+					RequestID: 123,
 					Status:    ToProxyRespStatusSuccess,
 					Error:     "",
 				},
@@ -778,7 +764,7 @@ func TestToGatewayMessage(t *testing.T) {
 			want: &ToGatewayMessage{
 				Type: ToGatewayMessageLoopback,
 				LoopbackMessage: &ToProducerResponse{
-					RequestID: "req-123",
+					RequestID: 123,
 					Status:    ToProxyRespStatusSuccess,
 					Error:     "",
 				},

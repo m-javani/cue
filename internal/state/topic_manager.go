@@ -51,7 +51,7 @@ const (
 type TopicCommand struct {
 	Type      TopicCommandType
 	Topic     string
-	RequestID string
+	RequestID uint32
 	RespCh    chan<- model.ToProducerResponse
 
 	// For proxy topology updates

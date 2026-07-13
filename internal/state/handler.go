@@ -27,6 +27,7 @@ import (
 
 type Handler interface {
 	ProcessCommand(ctx context.Context, topic string, cmd *model.Command, index uint64) error
+	TopicExist(topic string) bool
 }
 
 type CHandler struct {
@@ -35,13 +36,18 @@ type CHandler struct {
 	logger     *zap.Logger
 }
 
-// Fixed: Return the Handler interface, not *Handler
 func NewHandler(cmdRouter *CommandRouter, topologyCh chan<- TopicCommand, logger *zap.Logger) Handler {
 	return &CHandler{
 		cmdRouter:  cmdRouter,
 		topologyCh: topologyCh,
 		logger:     logger,
 	}
+}
+
+func (h *CHandler) TopicExist(topic string) bool {
+	// indirect check by router
+	_, exist := h.cmdRouter.GetChannel(topic)
+	return exist
 }
 
 // ProcessCommand processes a committed command from Raft
@@ -85,7 +91,7 @@ func (h *CHandler) ensureChannel(ctx context.Context, topic string) (chan<- mode
 	case h.topologyCh <- TopicCommand{
 		Type:      TopicCommandSpawn,
 		Topic:     topic,
-		RequestID: fmt.Sprintf("%d", rand.IntN(1000)),
+		RequestID: rand.Uint32N(1000),
 		RespCh:    respCh,
 	}:
 	case <-ctx.Done():

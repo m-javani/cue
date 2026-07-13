@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/m-javani/cue/internal"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/m-javani/cue/internal/model"
 	"github.com/vmihailenco/msgpack/v5"
@@ -178,20 +179,20 @@ func (a *ClusterAgent) handleConfigChange(committed CommittedEntry) error {
 
 	switch committed.Type {
 	case raftpb.EntryConfChange:
-		var cc raftpb.ConfChange
-		if err := cc.Unmarshal(committed.Data); err != nil {
+		cc := &raftpb.ConfChange{}
+		if err := proto.Unmarshal(committed.Data, cc); err != nil {
 			return fmt.Errorf("unmarshal ConfChange: %w", err)
 		}
-		return a.handleConfChangeSingle(cc.NodeID, cc.Type)
+		return a.handleConfChangeSingle(cc.GetNodeId(), cc.GetType())
 
 	case raftpb.EntryConfChangeV2:
-		var cc raftpb.ConfChangeV2
-		if err := cc.Unmarshal(committed.Data); err != nil {
+		cc := &raftpb.ConfChangeV2{}
+		if err := proto.Unmarshal(committed.Data, cc); err != nil {
 			return fmt.Errorf("unmarshal ConfChangeV2: %w", err)
 		}
 		// V2 can have multiple changes in one entry
-		for _, change := range cc.Changes {
-			if err := a.handleConfChangeSingle(change.NodeID, change.Type); err != nil {
+		for _, change := range cc.GetChanges() {
+			if err := a.handleConfChangeSingle(change.GetNodeId(), change.GetType()); err != nil {
 				return err
 			}
 		}
@@ -252,14 +253,25 @@ func (a *ClusterAgent) handleNormalCommand(committed CommittedEntry) error {
 	}
 
 	switch cmd.Type {
-	case model.CmdAddJob:
-		if cmd.AddJob == nil {
+	case model.CmdAddJobs:
+		if cmd.AddJobs == nil {
 			return fmt.Errorf("add_job payload missing")
 		}
-		if a.deadJobs[cmd.AddJob.Job.ID] {
+
+		alive := len(cmd.AddJobs.Jobs)
+		for i := range cmd.AddJobs.Jobs {
+			if a.deadJobs[cmd.AddJobs.Jobs[i].ID] {
+				alive--
+				cmd.AddJobs.Jobs[i].Done = true
+			}
+		}
+		if alive == 0 {
 			return nil
 		}
-		return a.handler.ProcessCommand(a.ctx, cmd.AddJob.Job.Topic, &cmd, committed.Index)
+
+		a.handler.ProcessCommand(a.ctx, cmd.AddJobs.Jobs[0].Topic, &cmd, committed.Index)
+
+		return nil
 
 	case model.CmdDone:
 		if cmd.Done == nil {
@@ -317,13 +329,13 @@ func (a *ClusterAgent) handleOutgoingMessages() {
 }
 
 // sendRaftMessage sends a Raft message to the target node
-func (a *ClusterAgent) sendRaftMessage(msg raftpb.Message) error {
-	targetNodeID, ok := a.discovery.GetNodeIDFromRaftID(msg.To)
+func (a *ClusterAgent) sendRaftMessage(msg *raftpb.Message) error {
+	targetNodeID, ok := a.discovery.GetNodeIDFromRaftID(msg.GetTo())
 	if !ok {
 		return internal.ErrUnknownNodeID
 	}
 
-	data, err := msg.Marshal()
+	data, err := proto.Marshal(msg)
 	if err != nil {
 		return err
 	}

@@ -27,6 +27,7 @@ import (
 	"go.etcd.io/raft/v3"
 	"go.etcd.io/raft/v3/raftpb"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type JobState struct {
@@ -45,12 +46,12 @@ type StorageCore struct {
 	mu sync.RWMutex // protects: entries, states, indices, jobIndex, writeBuffer, etc.
 
 	// In-memory log
-	entries map[uint64]raftpb.Entry
+	entries map[uint64]*raftpb.Entry
 
 	// Raft state
-	hardState    raftpb.HardState
-	confState    raftpb.ConfState
-	snapshotMeta raftpb.SnapshotMetadata
+	hardState    *raftpb.HardState
+	confState    *raftpb.ConfState
+	snapshotMeta *raftpb.SnapshotMetadata
 
 	// Index tracking
 	firstIndex uint64
@@ -76,22 +77,26 @@ type StorageCore struct {
 // ========== Update Indices ==========
 func (c *StorageCore) updateIndices() {
 	if len(c.entries) == 0 {
-		c.firstIndex = c.snapshotMeta.Index + 1
-		c.lastIndex = c.snapshotMeta.Index
+		// Safe handling when snapshotMeta.Index is nil
+		snapIndex := c.snapshotMeta.GetIndex()
+		c.firstIndex = snapIndex + 1
+		c.lastIndex = snapIndex
 		return
 	}
 
 	first := uint64(^uint64(0))
 	last := uint64(0)
 
-	for _, e := range c.entries {
-		if e.Index < first {
-			first = e.Index
+	for idx := range c.entries {
+		index := c.entries[idx].GetIndex()
+		if index < first {
+			first = index
 		}
-		if e.Index > last {
-			last = e.Index
+		if index > last {
+			last = index
 		}
 	}
+
 	c.firstIndex = first
 	c.lastIndex = last
 }
@@ -99,10 +104,10 @@ func (c *StorageCore) updateIndices() {
 // ========== Load Snapshot Metadata ==========
 func (c *StorageCore) loadSnapshotMeta() error {
 	if _, err := os.Stat(c.snapshotPath); os.IsNotExist(err) {
-		c.snapshotMeta = raftpb.SnapshotMetadata{
-			Index:     0,
-			Term:      0,
-			ConfState: raftpb.ConfState{},
+		c.snapshotMeta = &raftpb.SnapshotMetadata{
+			Index:     proto.Uint64(0),
+			Term:      proto.Uint64(0),
+			ConfState: &raftpb.ConfState{},
 		}
 		return nil
 	}
@@ -111,19 +116,20 @@ func (c *StorageCore) loadSnapshotMeta() error {
 	if err != nil {
 		return fmt.Errorf("failed to read snapshot meta: %w", err)
 	}
-	if err := c.snapshotMeta.Unmarshal(data); err != nil {
+
+	if err := proto.Unmarshal(data, c.snapshotMeta); err != nil {
 		return fmt.Errorf("failed to decode snapshot meta: %w", err)
 	}
 
 	c.logger.Info("loaded snapshot metadata",
-		zap.Uint64("index", c.snapshotMeta.Index),
-		zap.Uint64("term", c.snapshotMeta.Term))
+		zap.Uint64("index", c.snapshotMeta.GetIndex()),
+		zap.Uint64("term", c.snapshotMeta.GetIndex()))
 	return nil
 }
 
 // ========== Save Snapshot Metadata ==========
 func (c *StorageCore) saveSnapshotMeta() error {
-	data, err := c.snapshotMeta.Marshal()
+	data, err := proto.Marshal(c.snapshotMeta)
 	if err != nil {
 		return fmt.Errorf("failed to encode snapshot meta: %w", err)
 	}
@@ -132,40 +138,41 @@ func (c *StorageCore) saveSnapshotMeta() error {
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write temp snapshot meta: %w", err)
 	}
+
 	if err := os.Rename(tmpPath, c.snapshotPath); err != nil {
 		return fmt.Errorf("failed to rename snapshot meta: %w", err)
 	}
 
+	// Sync directory for durability
 	if dir, err := os.Open(c.snapshotPath); err == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
 	}
+
 	return nil
 }
 
 // ========== Install Snapshot ==========
-func (c *StorageCore) installSnapshot(meta raftpb.SnapshotMetadata) error {
+func (c *StorageCore) installSnapshot(meta *raftpb.SnapshotMetadata) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.confState = meta.ConfState
 	c.snapshotMeta = meta
+
 	_ = c.saveSnapshotMeta()
-
 	// do not compact on leader sent snapshots
-
 	return nil
 }
 
 // ========== Setters ==========
-func (c *StorageCore) setHardState(hs raftpb.HardState) error {
+func (c *StorageCore) setHardState(hs *raftpb.HardState) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.hardState = hs
 	return nil
 }
 
-func (c *StorageCore) setConfState(cs raftpb.ConfState) error {
+func (c *StorageCore) setConfState(cs *raftpb.ConfState) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.confState = cs
@@ -193,25 +200,25 @@ func (c *StorageCore) recover() error {
 
 	c.jobIndex = make(map[string]*JobState)
 
-	snapshotIndex := c.snapshotMeta.Index
+	snapshotIndex := c.snapshotMeta.GetIndex()
 
-	err := c.wal.Recover(snapshotIndex, func(entry raftpb.Entry) error {
+	err := c.wal.Recover(snapshotIndex, func(entry *raftpb.Entry) error {
 		// Store entry
-		c.entries[entry.Index] = entry
+		c.entries[entry.GetIndex()] = entry
 
 		// Rebuild job secondary index
 		var cmd model.Command
 		if err := msgpack.Unmarshal(entry.Data, &cmd); err == nil {
 			switch cmd.Type {
-			case model.CmdAddJob:
-				if cmd.AddJob != nil {
-					jobID := cmd.AddJob.Job.ID
-
-					if _, exists := c.jobIndex[jobID]; !exists {
-						c.jobIndex[jobID] = &JobState{}
+			case model.CmdAddJobs:
+				if cmd.AddJobs != nil {
+					for _, job := range cmd.AddJobs.Jobs {
+						jobID := job.ID
+						if _, exists := c.jobIndex[jobID]; !exists {
+							c.jobIndex[jobID] = &JobState{}
+						}
+						c.jobIndex[jobID].AddIndex = entry.GetIndex()
 					}
-
-					c.jobIndex[jobID].AddIndex = entry.Index
 				}
 
 			case model.CmdDone, model.CmdDrop:
@@ -232,7 +239,7 @@ func (c *StorageCore) recover() error {
 					}
 
 					js := c.jobIndex[jobID]
-					js.CompleteIndex = entry.Index
+					js.CompleteIndex = entry.GetIndex()
 					js.CompleteType = completeType
 				}
 			}
@@ -259,7 +266,7 @@ func (c *StorageCore) recover() error {
 }
 
 // ========== Append Methods ==========
-func (c *StorageCore) appendEntries(entries []raftpb.Entry) error {
+func (c *StorageCore) appendEntries(entries []*raftpb.Entry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -267,21 +274,21 @@ func (c *StorageCore) appendEntries(entries []raftpb.Entry) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, entry := range entries {
+	for idx, entry := range entries {
 		// Raft truncation: remove conflicting tail
-		if entry.Index <= c.lastIndex {
-			for i := entry.Index; i <= c.lastIndex; i++ {
+		if entry.GetIndex() <= c.lastIndex {
+			for i := entry.GetIndex(); i <= c.lastIndex; i++ {
 				delete(c.entries, i)
 			}
 		}
 
-		c.entries[entry.Index] = entry
+		c.entries[entry.GetIndex()] = entries[idx]
 
-		if entry.Index > c.lastIndex {
-			c.lastIndex = entry.Index
+		if entry.GetIndex() > c.lastIndex {
+			c.lastIndex = entry.GetIndex()
 		}
-		if c.firstIndex == 0 || entry.Index < c.firstIndex {
-			c.firstIndex = entry.Index
+		if c.firstIndex == 0 || entry.GetIndex() < c.firstIndex {
+			c.firstIndex = entry.GetIndex()
 		}
 	}
 
@@ -290,7 +297,7 @@ func (c *StorageCore) appendEntries(entries []raftpb.Entry) error {
 
 // appendCommitted persists a single committed entry to the WAL buffer
 // and updates the job secondary index.
-func (c *StorageCore) appendCommitted(entry raftpb.Entry) error {
+func (c *StorageCore) appendCommitted(entry *raftpb.Entry) error {
 	c.mu.Lock()
 
 	bufferedEntry, err := encodeBufferedEntry(entry)
@@ -305,14 +312,16 @@ func (c *StorageCore) appendCommitted(entry raftpb.Entry) error {
 	var cmd model.Command
 	if err := msgpack.Unmarshal(entry.Data, &cmd); err == nil {
 		switch cmd.Type {
-		case model.CmdAddJob:
-			if cmd.AddJob != nil {
-				jobID := cmd.AddJob.Job.ID
-				if _, exists := c.jobIndex[jobID]; !exists {
-					c.jobIndex[jobID] = &JobState{}
+		case model.CmdAddJobs:
+			if cmd.AddJobs != nil {
+				for _, job := range cmd.AddJobs.Jobs {
+					jobID := job.ID
+					if _, exists := c.jobIndex[jobID]; !exists {
+						c.jobIndex[jobID] = &JobState{}
+					}
+					c.jobIndex[jobID].AddIndex = entry.GetIndex()
+					c.jobIndex[jobID].CompleteType = "" // reset if re-added
 				}
-				c.jobIndex[jobID].AddIndex = entry.Index
-				c.jobIndex[jobID].CompleteType = "" // reset if re-added
 			}
 
 		case model.CmdDone, model.CmdDrop:
@@ -331,7 +340,7 @@ func (c *StorageCore) appendCommitted(entry raftpb.Entry) error {
 					c.jobIndex[jobID] = &JobState{}
 				}
 				js := c.jobIndex[jobID]
-				js.CompleteIndex = entry.Index
+				js.CompleteIndex = entry.GetIndex()
 				js.CompleteType = completeType
 			}
 		}
@@ -409,8 +418,8 @@ func (c *StorageCore) compact() error {
 
 	// Remove old entries from in-memory map
 	for _, e := range c.entries {
-		if e.Index < upToIndex {
-			delete(c.entries, e.Index)
+		if e.GetIndex() < upToIndex {
+			delete(c.entries, e.GetIndex())
 		}
 	}
 
@@ -427,11 +436,13 @@ func (c *StorageCore) compact() error {
 		}
 	}
 
-	snapshotMeta := raftpb.SnapshotMetadata{
-		Index:     upToIndex - 1,
+	idx := upToIndex - 1
+	snapshotMeta := &raftpb.SnapshotMetadata{
+		Index:     &idx,
 		Term:      c.hardState.Term,
 		ConfState: c.confState,
 	}
+
 	c.snapshotMeta = snapshotMeta
 	_ = c.saveSnapshotMeta()
 
@@ -522,7 +533,7 @@ func NewRaftStorage(walDir, snapshotDir string, flushThreshold int, logger *zap.
 	}
 
 	core := &StorageCore{
-		entries:        make(map[uint64]raftpb.Entry),
+		entries:        make(map[uint64]*raftpb.Entry),
 		wal:            wal,
 		writeBuffer:    make([]BufferedEntry, 0, flushThreshold),
 		flushThreshold: flushThreshold,
@@ -532,9 +543,9 @@ func NewRaftStorage(walDir, snapshotDir string, flushThreshold int, logger *zap.
 		jobIndex:       make(map[string]*JobState),
 		metrics:        metrics,
 		mu:             sync.RWMutex{},
-		hardState:      raftpb.HardState{},
-		confState:      raftpb.ConfState{},
-		snapshotMeta:   raftpb.SnapshotMetadata{},
+		hardState:      &raftpb.HardState{},
+		confState:      &raftpb.ConfState{},
+		snapshotMeta:   &raftpb.SnapshotMetadata{},
 		firstIndex:     0,
 		lastIndex:      0,
 		flushing:       atomic.Int32{},
@@ -557,34 +568,34 @@ func NewRaftStorage(walDir, snapshotDir string, flushThreshold int, logger *zap.
 }
 
 // raft.Storage interface methods + public methods
-func (s *RaftStorage) InitialState() (raftpb.HardState, raftpb.ConfState, error) {
+func (s *RaftStorage) InitialState() (*raftpb.HardState, *raftpb.ConfState, error) {
 	return s.core.hardState, s.core.confState, nil
 }
 
-func (s *RaftStorage) Append(entries []raftpb.Entry) error {
+func (s *RaftStorage) Append(entries []*raftpb.Entry) error {
 	return s.core.appendEntries(entries)
 }
 
-func (s *RaftStorage) Entries(lo, hi, maxSize uint64) ([]raftpb.Entry, error) {
+func (s *RaftStorage) Entries(lo, hi, maxSize uint64) ([]*raftpb.Entry, error) {
 	if lo < s.core.firstIndex {
 		return nil, raft.ErrCompacted
 	}
-
 	if hi > s.core.lastIndex+1 {
 		return nil, raft.ErrUnavailable
 	}
 
-	var entries []raftpb.Entry
+	var entries []*raftpb.Entry
 	var size uint64
 	for idx := lo; idx < hi; idx++ {
 		entry, ok := s.core.entries[idx]
 		if !ok {
 			return nil, raft.ErrUnavailable
 		}
-		entrySize := uint64(entry.Size())
+		entrySize := uint64(proto.Size(entry))
 		if maxSize > 0 && size+entrySize > maxSize {
 			break
 		}
+		// Return pointer (required by new interface). The struct is copied to heap.
 		entries = append(entries, entry)
 		size += entrySize
 	}
@@ -592,10 +603,10 @@ func (s *RaftStorage) Entries(lo, hi, maxSize uint64) ([]raftpb.Entry, error) {
 }
 
 func (s *RaftStorage) Term(idx uint64) (uint64, error) {
-	if idx == s.core.snapshotMeta.Index {
-		return s.core.snapshotMeta.Term, nil
+	if idx == s.core.snapshotMeta.GetIndex() {
+		return s.core.snapshotMeta.GetTerm(), nil
 	}
-	if idx == 0 && s.core.snapshotMeta.Index == 1 {
+	if idx == 0 && s.core.snapshotMeta.GetIndex() == 1 {
 		return 1, nil
 	}
 	if idx < s.core.firstIndex {
@@ -605,7 +616,7 @@ func (s *RaftStorage) Term(idx uint64) (uint64, error) {
 		return 0, raft.ErrUnavailable
 	}
 	if entry, ok := s.core.entries[idx]; ok {
-		return entry.Term, nil
+		return entry.GetTerm(), nil
 	}
 	if idx <= s.core.lastIndex {
 		return 0, raft.ErrUnavailable
@@ -638,22 +649,24 @@ func (s *RaftStorage) GetCompletedJobIDs() map[string]bool {
 	return completed
 }
 
-func (s *RaftStorage) Snapshot() (raftpb.Snapshot, error) {
-	snapshot := raftpb.Snapshot{
+func (s *RaftStorage) Snapshot() (*raftpb.Snapshot, error) {
+	snapshot := &raftpb.Snapshot{
 		Metadata: s.core.snapshotMeta,
 		Data:     nil,
 	}
-	if snapshot.Metadata.Index == 0 {
-		snapshot.Metadata.Index = 1
+	if snapshot.Metadata.GetIndex() == 0 {
+		var idx uint64 = 1
+		snapshot.Metadata.Index = &idx
 	}
-	if snapshot.Metadata.Term == 0 {
-		snapshot.Metadata.Term = 1
+	if snapshot.Metadata.GetTerm() == 0 {
+		var term uint64 = 1
+		snapshot.Metadata.Term = &term
 	}
 	return snapshot, nil
 }
 
 // Public API methods
-func (s *RaftStorage) AppendCommitted(entry raftpb.Entry) error {
+func (s *RaftStorage) AppendCommitted(entry *raftpb.Entry) error {
 	return s.core.appendCommitted(entry)
 }
 
@@ -665,11 +678,11 @@ func (s *RaftStorage) Compact() error {
 	return s.core.compact()
 }
 
-func (s *RaftStorage) InstallSnapshot(meta raftpb.SnapshotMetadata) error {
+func (s *RaftStorage) InstallSnapshot(meta *raftpb.SnapshotMetadata) error {
 	return s.core.installSnapshot(meta)
 }
 
-func (s *RaftStorage) SetHardState(hs raftpb.HardState) error {
+func (s *RaftStorage) SetHardState(hs *raftpb.HardState) error {
 	return s.core.setHardState(hs)
 }
 

@@ -50,6 +50,11 @@ func NewFakeHandler(logger *zap.Logger, cmdRouter *state.CommandRouter) state.Ha
 	}
 }
 
+func (h *FakeHandler) TopicExist(topic string) bool {
+	_, exist := h.cmdRouter.GetChannel(topic)
+	return exist
+}
+
 func (h *FakeHandler) ProcessCommand(ctx context.Context, topic string, cmd *model.Command, index uint64) error {
 	if cmd.RespInfo == nil || cmd.RespInfo.RespCh == nil {
 		return nil
@@ -322,7 +327,9 @@ func (tc *TestCluster) AddNode(
 		DLQMaxSizeBytes:      1024,
 	}
 
-	handler := NewFakeHandler(logger, nil)
+	router := state.NewCommandRouter()
+	router.Register("test-topic", make(chan model.Command))
+	handler := NewFakeHandler(logger, router)
 	ctx, cancel := context.WithCancel(context.Background())
 	var status atomic.Uint32
 	status.Store(model.NodeStatusUnavailable.ToUin32())
@@ -880,12 +887,45 @@ func TestReplication(t *testing.T) {
 	}
 
 	// Send 10 commands
-	numCommands := 2
+	numCommands := 100
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	t.Logf("Sending %d commands to leader %s...", numCommands, leaderID)
+
+	// check if cluster agent returns error when sending to a missing topic
+	respCh := make(chan model.ToProducerResponse, 1)
+	cmd := model.Command{
+		Type: model.CmdAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: "not-exist-topic",
+			Jobs: []model.Job{{
+				ID:    "job-x",
+				Topic: "not-exist-topic",
+				Data:  fmt.Appendf(nil, "payload-1"),
+			}},
+		},
+		RespInfo: &model.RespInfo{
+			RequestID: 1,
+			RespCh:    respCh,
+		},
+	}
+	err = cl.Propose(ctx, cmd)
+	if err != nil {
+		t.Logf("Failed to propose topic check command %v", err)
+		return
+	}
+	select {
+	case respInfo := <-respCh:
+		if respInfo.Status != model.ToProxyRespStatusError {
+			t.Logf("should return error on sending jobs to a not-exist-topic")
+		}
+	case <-ctx.Done():
+		t.Logf("Topic not exist checkCommand timed out")
+	}
+
+	// send regular commands
 
 	var successCount atomic.Int32
 	successCount.Store(0)
@@ -893,16 +933,17 @@ func TestReplication(t *testing.T) {
 		respCh := make(chan model.ToProducerResponse, 1)
 
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  fmt.Appendf(nil, "payload-%d", i),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: "a-request-id",
+				RequestID: 1,
 				RespCh:    respCh,
 			},
 		}
@@ -1053,16 +1094,17 @@ func TestNewNodeCatchesUp(t *testing.T) {
 	for i := 1; i <= numCommands; i++ {
 		respCh := make(chan model.ToProducerResponse, 1)
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  fmt.Appendf(nil, "payload-%d", i),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: fmt.Sprintf("job-%d", i),
+				RequestID: uint32(i),
 				RespCh:    respCh,
 			},
 		}
@@ -1115,16 +1157,17 @@ func TestNewNodeCatchesUp(t *testing.T) {
 	// Try sending more commands after join
 	respCh := make(chan model.ToProducerResponse, 1)
 	cmd := model.Command{
-		Type: model.CmdAddJob,
-		AddJob: &model.AddJobPayload{
-			Job: model.Job{
+		Type: model.CmdAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: "test-topic",
+			Jobs: []model.Job{{
 				ID:    "job-after-join",
 				Topic: "test-topic",
 				Data:  []byte("post-join-payload"),
-			},
+			}},
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "a-request-id",
+			RequestID: 1,
 			RespCh:    respCh,
 		},
 	}
@@ -1184,16 +1227,17 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 	for i := 1; i <= 15; i++ {
 		respCh := make(chan model.ToProducerResponse, 1)
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  []byte(fmt.Sprintf("payload-%d", i)),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: "a-request-id",
+				RequestID: 1,
 				RespCh:    respCh,
 			},
 		}
@@ -1220,16 +1264,17 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 	for i := 16; i <= 25; i++ {
 		respCh := make(chan model.ToProducerResponse, 1)
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  fmt.Appendf(nil, "payload-%d", i),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: "a-request-id",
+				RequestID: 1,
 				RespCh:    respCh,
 			},
 		}
@@ -1301,16 +1346,17 @@ func TestClusterMembershipChanges(t *testing.T) {
 	for i := 1; i <= 5; i++ {
 		respCh := make(chan model.ToProducerResponse, 1)
 		cmd := model.Command{
-			Type: model.CmdAddJob,
-			AddJob: &model.AddJobPayload{
-				Job: model.Job{
+			Type: model.CmdAddJobs,
+			AddJobs: &model.AddJobsPayload{
+				Topic: "test-topic",
+				Jobs: []model.Job{{
 					ID:    fmt.Sprintf("job-%d", i),
 					Topic: "test-topic",
 					Data:  []byte(fmt.Sprintf("payload-%d", i)),
-				},
+				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: fmt.Sprintf("job-%d", i),
+				RequestID: uint32(i),
 				RespCh:    respCh,
 			},
 		}
@@ -1342,7 +1388,7 @@ func TestClusterMembershipChanges(t *testing.T) {
 			NodeID: node4Agent.GetNodeID(),
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "a-sample-id",
+			RequestID: 1,
 			RespCh:    addNodeRespCh,
 		},
 	}
@@ -1365,7 +1411,7 @@ func TestClusterMembershipChanges(t *testing.T) {
 			NodeID: node4Agent.GetNodeID(),
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "a-sample-id",
+			RequestID: 1,
 			RespCh:    removeNodeRespCh,
 		},
 	}
@@ -1430,16 +1476,17 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 			defer wg.Done()
 			respCh := make(chan model.ToProducerResponse, 1)
 			cmd := model.Command{
-				Type: model.CmdAddJob,
-				AddJob: &model.AddJobPayload{
-					Job: model.Job{
+				Type: model.CmdAddJobs,
+				AddJobs: &model.AddJobsPayload{
+					Topic: "test-topic",
+					Jobs: []model.Job{{
 						ID:    fmt.Sprintf("job-%d", i),
 						Topic: "test-topic",
 						Data:  []byte(fmt.Sprintf("data-%d", i)),
-					},
+					}},
 				},
 				RespInfo: &model.RespInfo{
-					RequestID: "a-request-id",
+					RequestID: 1,
 					RespCh:    respCh,
 				},
 			}
@@ -1462,7 +1509,7 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 					JobIDs: []string{fmt.Sprintf("job-%d", i)},
 				},
 				RespInfo: &model.RespInfo{
-					RequestID: "a-request-id",
+					RequestID: 1,
 					RespCh:    respCh,
 				},
 			}
@@ -1479,16 +1526,16 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 			defer wg.Done()
 			respCh := make(chan model.ToProducerResponse, 1)
 			cmd := model.Command{
-				Type: model.CmdAddJob,
-				AddJob: &model.AddJobPayload{
-					Job: model.Job{
+				Type: model.CmdAddJobs,
+				AddJobs: &model.AddJobsPayload{
+					Jobs: []model.Job{{
 						ID:    fmt.Sprintf("job-%d", i),
 						Topic: "test-topic",
 						Data:  []byte(fmt.Sprintf("data-%d", i)),
-					},
+					}},
 				},
 				RespInfo: &model.RespInfo{
-					RequestID: "a-request-id",
+					RequestID: 1,
 					RespCh:    respCh,
 				},
 			}

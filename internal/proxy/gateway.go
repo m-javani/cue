@@ -131,7 +131,7 @@ func (pc *ConnectionPair) canAcceptJob(topic string) bool {
 	return status.CanAccept
 }
 
-func (pc *ConnectionPair) sendBackErrorResponse(request_id, errStr string) {
+func (pc *ConnectionPair) sendBackErrorResponse(request_id uint32, errStr string) {
 	msg := model.ToGatewayMessage{
 		Type: model.ToGatewayMessageLoopback,
 		LoopbackMessage: &model.ToProducerResponse{
@@ -291,13 +291,12 @@ func (p *ConnectionPair) runOutboundHandler(
 			return
 
 		case resp, ok := <-responseCh:
-			respCopy := resp
 			if !ok {
 				return
 			}
 			msg := model.ToProxyMessage{
 				Type:     model.ProxyMessageResponse,
-				Response: &respCopy,
+				Response: &resp,
 			}
 			data, err := msgpack.Marshal(msg)
 			if err != nil {
@@ -476,16 +475,16 @@ func (p *ConnectionPair) runInboundHandler(ctx context.Context,
 		// Handle add job or done
 		var cmd model.Command
 		switch req.Type {
-		case model.ReqAddJob:
-			if !p.canAcceptJob(req.AddJob.Job.Topic) {
+		case model.ReqAddJobs:
+			if !p.canAcceptJob(req.AddJobs.Topic) {
 				// send a queue is full message to gateway
 				p.sendBackErrorResponse(req.RequestID, "queue_full")
 				continue
 			}
 
 			cmd = model.Command{
-				Type:   model.CmdAddJob,
-				AddJob: req.AddJob,
+				Type:    model.CmdAddJobs,
+				AddJobs: req.AddJobs,
 				RespInfo: &model.RespInfo{
 					RequestID: req.RequestID,
 					RespCh:    responseCh,

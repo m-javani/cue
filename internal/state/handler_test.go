@@ -605,7 +605,7 @@ func TestProcessCommand_AllCommandTypes(t *testing.T) {
 		{Type: model.CmdAddNode},
 		{Type: model.CmdRemoveNode},
 		{Type: model.CmdTransferLeader},
-		{Type: model.CmdAddJob},
+		{Type: model.CmdAddJobs},
 		{Type: model.CmdDrop},
 	}
 

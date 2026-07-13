@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,7 +69,7 @@ type AdminAPI struct {
 	peerStore *model.PeerStore
 	leaderID  *atomic.Value
 
-	reqIDCounter atomic.Uint64
+	reqIDCounter atomic.Uint32
 
 	logger *zap.Logger
 }
@@ -95,7 +94,7 @@ func NewAdminAPI(
 		peerStore:    peerStore,
 		leaderID:     leaderID,
 		logger:       logger,
-		reqIDCounter: atomic.Uint64{},
+		reqIDCounter: atomic.Uint32{},
 	}
 
 	// Load initial auth config
@@ -107,8 +106,8 @@ func NewAdminAPI(
 	return api
 }
 
-func (api *AdminAPI) nextRequestID() string {
-	return strconv.FormatUint(api.reqIDCounter.Add(1), 36)
+func (api *AdminAPI) nextRequestID() uint32 {
+	return api.reqIDCounter.Add(1)
 }
 
 // Run starts the API server
