@@ -176,9 +176,9 @@ type Proxy struct {
 	wg           sync.WaitGroup
 
 	topics     map[string]int      // topic -> consumer count
-	requests   map[string]bool     // reqID -> received response
+	requests   map[uint32]bool     // reqID -> received response
 	dispatches map[string][]string // topic -> job IDs received
-	nextReqID  atomic.Uint64
+	nextReqID  atomic.Uint32
 	mu         sync.RWMutex
 }
 
@@ -333,7 +333,7 @@ func (p *Proxy) SendRequest(req model.ProxyRequest) error {
 	if err != nil {
 		if ctx.Err() == nil && p.ctx.Err() == nil {
 			p.logger.Error("Failed to open stream for request",
-				zap.String("req_id", req.RequestID),
+				zap.Uint32("req_id", req.RequestID),
 				zap.Error(err))
 		}
 		return err
@@ -344,7 +344,7 @@ func (p *Proxy) SendRequest(req model.ProxyRequest) error {
 	data, err := msgpack.Marshal(req)
 	if err != nil {
 		p.logger.Error("Failed to marshal request",
-			zap.String("req_id", req.RequestID),
+			zap.Uint32("req_id", req.RequestID),
 			zap.Error(err))
 		return err
 	}
@@ -354,7 +354,7 @@ func (p *Proxy) SendRequest(req model.ProxyRequest) error {
 	binary.LittleEndian.PutUint32(lenBuf, uint32(len(data)))
 	if _, err := stream.Write(lenBuf); err != nil {
 		p.logger.Error("Failed to write length prefix",
-			zap.String("req_id", req.RequestID),
+			zap.Uint32("req_id", req.RequestID),
 			zap.Error(err))
 		return err
 	}
@@ -362,7 +362,7 @@ func (p *Proxy) SendRequest(req model.ProxyRequest) error {
 	// Write the marshaled data
 	if _, err := stream.Write(data); err != nil {
 		p.logger.Error("Failed to write request data",
-			zap.String("req_id", req.RequestID),
+			zap.Uint32("req_id", req.RequestID),
 			zap.Error(err))
 		return err
 	}
@@ -393,7 +393,7 @@ func (p *Proxy) SendHeartbeat() {
 	}
 
 	req := model.ProxyRequest{
-		RequestID:       fmt.Sprintf("hb-%d", p.nextReqID.Add(1)),
+		RequestID:       p.nextReqID.Add(1),
 		Type:            model.ReqHeartbeatReport,
 		HeartbeatReport: hb,
 	}
@@ -408,7 +408,7 @@ func (p *Proxy) AddConsumer(topic string) {
 
 func (p *Proxy) SendAddTopic(topic string) {
 	req := model.ProxyRequest{
-		RequestID: fmt.Sprintf("addt-%d", p.nextReqID.Add(1)),
+		RequestID: p.nextReqID.Add(1),
 		Type:      model.ReqAddTopic,
 		AddTopic:  &model.AddTopicPayload{Topic: topic},
 	}
@@ -417,7 +417,7 @@ func (p *Proxy) SendAddTopic(topic string) {
 
 func (p *Proxy) SendAddJob(job model.Job) error {
 	req := model.ProxyRequest{
-		RequestID: fmt.Sprintf("addj-%d", p.nextReqID.Add(1)),
+		RequestID: p.nextReqID.Add(1),
 		Type:      model.ReqAddJobs,
 		AddJobs: &model.AddJobsPayload{
 			Topic: job.Topic,
@@ -564,7 +564,7 @@ func (p *Proxies) AddProxy(nodeID string) (*Proxy, error) {
 		certDir:     p.certDir,
 		ca:          p.ca,
 		topics:      make(map[string]int),
-		requests:    make(map[string]bool),
+		requests:    make(map[uint32]bool),
 		dispatches:  make(map[string][]string),
 	}
 
@@ -1205,7 +1205,7 @@ func TestGateway_LoopbackErrorResponses(t *testing.T) {
 	t.Run("loopback error when not leader", func(t *testing.T) {
 		// Clear any existing responses
 		prx.mu.Lock()
-		prx.requests = make(map[string]bool)
+		prx.requests = make(map[uint32]bool)
 		prx.mu.Unlock()
 
 		// Change gateway status to not leader (follower)
@@ -1213,7 +1213,7 @@ func TestGateway_LoopbackErrorResponses(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 
 		// Send a job request
-		reqID := "loopback-test-001"
+		reqID := uint32(100)
 		job := model.Job{
 			ID:    "job-loopback-test",
 			Topic: "test-topic",
@@ -1250,7 +1250,7 @@ func TestGateway_LoopbackErrorResponses(t *testing.T) {
 	t.Run("loopback queue_full error", func(t *testing.T) {
 		// Clear previous responses
 		prx.mu.Lock()
-		prx.requests = make(map[string]bool)
+		prx.requests = make(map[uint32]bool)
 		prx.mu.Unlock()
 
 		// Set capacity to 0 to trigger queue_full
@@ -1263,7 +1263,7 @@ func TestGateway_LoopbackErrorResponses(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 
 		// Send a job - should get queue_full
-		reqID := "loopback-queue-full-001"
+		reqID := uint32(100)
 		job := model.Job{
 			ID:    "job-queue-full-loopback",
 			Topic: "test-topic",
@@ -1271,7 +1271,7 @@ func TestGateway_LoopbackErrorResponses(t *testing.T) {
 		}
 
 		req := model.ProxyRequest{
-			RequestID: reqID,
+			RequestID: uint32(reqID),
 			Type:      model.ReqAddJobs,
 			AddJobs: &model.AddJobsPayload{
 				Topic: job.Topic,

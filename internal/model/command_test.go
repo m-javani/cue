@@ -52,9 +52,9 @@ func TestCommandType_String(t *testing.T) {
 			want: "CmdTransferLeader",
 		},
 		{
-			name: "CmdAddJob",
+			name: "CmdAddJobs",
 			ct:   CmdAddJobs,
-			want: "CmdAddJob",
+			want: "CmdAddJobs",
 		},
 		{
 			name: "CmdDone",
@@ -141,11 +141,11 @@ func TestJobFields(t *testing.T) {
 func TestRespInfo(t *testing.T) {
 	ch := make(chan ToProducerResponse, 1)
 	respInfo := &RespInfo{
-		RequestID: "req-123",
+		RequestID: 123,
 		RespCh:    ch,
 	}
 
-	if respInfo.RequestID != "req-123" {
+	if respInfo.RequestID != 123 {
 		t.Errorf("RespInfo.RequestID = %v, want req-123", respInfo.RequestID)
 	}
 	if respInfo.RespCh == nil {
@@ -572,7 +572,7 @@ func TestCommandMarshalMsgpack_WithRespInfo(t *testing.T) {
 			JobIDs: []string{"job1"},
 		},
 		RespInfo: &RespInfo{
-			RequestID: "req-123",
+			RequestID: 123,
 			RespCh:    ch,
 		},
 	}

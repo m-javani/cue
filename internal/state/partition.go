@@ -222,21 +222,14 @@ func (p *Partition) handleCommand(cmd model.Command) {
 	}
 }
 
+// handleAddJobs now supports partial success + silently skips duplicates
 func (p *Partition) handleAddJobs(cmd model.Command) {
 	if cmd.AddJobs == nil {
-		if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
-			res := model.ToProducerResponse{
-				RequestID: cmd.RespInfo.RequestID,
-				Status:    model.ToProxyRespStatusError,
-				Error:     internal.ErrInvalidPayload.Error(),
-			}
-			select {
-			case cmd.RespInfo.RespCh <- res:
-			default:
-			}
-		}
+		p.sendErrorResponse(cmd, "invalid payload")
 		return
 	}
+
+	var failures []model.JobFailure
 
 	for _, job := range cmd.AddJobs.Jobs {
 		if job.Done {
@@ -246,21 +239,19 @@ func (p *Partition) handleAddJobs(cmd model.Command) {
 			job.CreatedAt = nowMilli()
 		}
 
-		// Create job in JobStore
+		// Create job in JobStore - silently ignore duplicates
 		idx, err := p.jobStore.Create(&job)
 		if err != nil {
-			if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
-				res := model.ToProducerResponse{
-					RequestID: cmd.RespInfo.RequestID,
-					Status:    model.ToProxyRespStatusError,
-					Error:     err.Error(),
-				}
-				select {
-				case cmd.RespInfo.RespCh <- res:
-				default:
-				}
+			if err == internal.ErrDuplicateJobID {
+				// Silently ignore duplicate (idempotent)
+				continue
 			}
-			return
+			// Other error (rare)
+			failures = append(failures, model.JobFailure{
+				JobID:  job.ID,
+				Reason: model.FailInternal,
+			})
+			continue // continue with other jobs
 		}
 
 		// Push to DispatchQueue
@@ -269,40 +260,57 @@ func (p *Partition) handleAddJobs(cmd model.Command) {
 			RetryCount: 0,
 			DueTimeSec: p.processQueue.currentSec(),
 		}
+
 		if err := p.processQueue.AddNewJob(dispatchRef); err != nil {
-			// DispatchQueue is full - release job and return error
+			// Queue full - release the job we just created
 			p.jobStore.Release(idx)
-			if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
-				res := model.ToProducerResponse{
-					RequestID: cmd.RespInfo.RequestID,
-					Status:    model.ToProxyRespStatusError,
-					Error:     "que is full",
-				}
-				select {
-				case cmd.RespInfo.RespCh <- res:
-				default:
-				}
-			}
-			return
+			failures = append(failures, model.JobFailure{
+				JobID:  job.ID,
+				Reason: model.FailQueueFull,
+			})
+			continue // continue with remaining jobs
 		}
 
 		p.metrics.JobAdded(p.topic, 1)
 	}
 
-	// Success
+	// Send response
+	resp := model.ToProducerResponse{
+		RequestID: cmd.RespInfo.RequestID,
+	}
+
+	if len(failures) == 0 {
+		resp.Status = model.ToProxyRespStatusSuccess
+	} else {
+		resp.Status = model.ToProxyRespStatusError
+		resp.Failures = failures
+	}
+
+	p.sendResponse(cmd, resp)
+}
+
+// Helper methods
+func (p *Partition) sendErrorResponse(cmd model.Command, errMsg string) {
 	if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
 		res := model.ToProducerResponse{
 			RequestID: cmd.RespInfo.RequestID,
-			Status:    model.ToProxyRespStatusSuccess,
-			Error:     "",
+			Status:    model.ToProxyRespStatusError,
+			Error:     errMsg,
 		}
 		select {
 		case cmd.RespInfo.RespCh <- res:
 		default:
 		}
 	}
+}
 
-	p.metrics.SetActiveDepth(p.topic, uint32(p.processQueue.ActiveSize()))
+func (p *Partition) sendResponse(cmd model.Command, resp model.ToProducerResponse) {
+	if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
+		select {
+		case cmd.RespInfo.RespCh <- resp:
+		default:
+		}
+	}
 }
 
 func (p *Partition) handleDone(cmd model.Command) {

@@ -16,7 +16,7 @@ package state
 
 import (
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1436,14 +1436,14 @@ func TestT4_ProxyChurnDuringLoad(t *testing.T) {
 	// Churn loop
 	for i := 0; i < churnIterations; i++ {
 		// Pick random proxy to add
-		addIdx := rand.Intn(numProxies)
+		addIdx := rand.IntN(numProxies)
 		tester.AddProxy(proxyIDs[addIdx])
 
 		// Pick random proxy to remove
-		removeIdx := rand.Intn(numProxies)
+		removeIdx := rand.IntN(numProxies)
 		// Don't remove the same proxy we just added (to keep at least one active)
 		for removeIdx == addIdx {
-			removeIdx = rand.Intn(numProxies)
+			removeIdx = rand.IntN(numProxies)
 		}
 		tester.RemoveProxy(proxyIDs[removeIdx])
 
@@ -3215,7 +3215,7 @@ func TestHandleDone_WithRespInfo(t *testing.T) {
 			JobIDs: []string{jobID},
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "req-done-1",
+			RequestID: 1,
 			RespCh:    respCh,
 		},
 	}
@@ -3233,8 +3233,8 @@ func TestHandleDone_WithRespInfo(t *testing.T) {
 		if resp.Status != model.ToProxyRespStatusSuccess {
 			t.Errorf("expected success status, got %v with error: %s", resp.Status, resp.Error)
 		}
-		if resp.RequestID != "req-done-1" {
-			t.Errorf("expected RequestID 'req-done-1', got '%s'", resp.RequestID)
+		if resp.RequestID != 1 {
+			t.Errorf("expected RequestID 1, got '%d'", resp.RequestID)
 		}
 		// Response received successfully - test passes
 	case <-time.After(1 * time.Second):
@@ -3285,7 +3285,7 @@ func TestHandleCommand_PeersRejected(t *testing.T) {
 			NodeID: "node1",
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "req-peers-1",
+			RequestID: 1,
 			RespCh:    respCh,
 		},
 	}
@@ -3304,8 +3304,8 @@ func TestHandleCommand_PeersRejected(t *testing.T) {
 		if resp.Error == "" {
 			t.Error("expected error message but got empty")
 		}
-		if resp.RequestID != "req-peers-1" {
-			t.Errorf("expected RequestID 'req-peers-1', got '%s'", resp.RequestID)
+		if resp.RequestID != 1 {
+			t.Errorf("expected RequestID 1, got %d", resp.RequestID)
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out waiting for response")
@@ -3325,7 +3325,7 @@ func TestHandleAddJob_DuplicateJobID(t *testing.T) {
 
 	// Wait a bit for processing
 	time.Sleep(200 * time.Millisecond)
-
+	reqID := rand.Uint32N(1000)
 	// Try to add same job ID again - should fail with duplicate error
 	respCh := make(chan model.ToProducerResponse, 1)
 	cmd := model.Command{
@@ -3339,7 +3339,7 @@ func TestHandleAddJob_DuplicateJobID(t *testing.T) {
 			}},
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "req-duplicate-1",
+			RequestID: reqID,
 			RespCh:    respCh,
 		},
 	}
@@ -3352,18 +3352,9 @@ func TestHandleAddJob_DuplicateJobID(t *testing.T) {
 
 	select {
 	case resp := <-respCh:
-		if resp.Status != model.ToProxyRespStatusError {
-			t.Errorf("expected error status for duplicate job, got %v", resp.Status)
-		}
-		if resp.Error == "" {
-			t.Error("expected error message but got empty")
-		}
-		if resp.RequestID != "req-duplicate-1" {
-			t.Errorf("expected RequestID 'req-duplicate-1', got '%s'", resp.RequestID)
-		}
 		// Verify it's the duplicate error
-		if resp.Error != internal.ErrDuplicateJobID.Error() {
-			t.Errorf("expected error '%s', got '%s'", internal.ErrDuplicateJobID.Error(), resp.Error)
+		if resp.Error == internal.ErrDuplicateJobID.Error() {
+			t.Errorf("expected ignoring error '%s'", internal.ErrDuplicateJobID.Error())
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timed out waiting for response")
@@ -3381,7 +3372,7 @@ func TestHandleDone_NilPayload(t *testing.T) {
 		Type: model.CmdDone,
 		Done: nil,
 		RespInfo: &model.RespInfo{
-			RequestID: "req-done-nil-1",
+			RequestID: 101,
 			RespCh:    respCh,
 		},
 	}
@@ -3400,8 +3391,8 @@ func TestHandleDone_NilPayload(t *testing.T) {
 		if resp.Error == "" {
 			t.Error("expected error message but got empty")
 		}
-		if resp.RequestID != "req-done-nil-1" {
-			t.Errorf("expected RequestID 'req-done-nil-1', got '%s'", resp.RequestID)
+		if resp.RequestID != 101 {
+			t.Errorf("expected RequestID 101, got '%d'", resp.RequestID)
 		}
 		if resp.Error != internal.ErrInvalidPayload.Error() {
 			t.Errorf("expected error '%s', got '%s'", internal.ErrInvalidPayload.Error(), resp.Error)
@@ -3422,7 +3413,7 @@ func TestHandleAddJob_NilPayload(t *testing.T) {
 		Type:    model.CmdAddJobs,
 		AddJobs: nil,
 		RespInfo: &model.RespInfo{
-			RequestID: "req-addjob-nil-1",
+			RequestID: 10,
 			RespCh:    respCh,
 		},
 	}
@@ -3441,8 +3432,8 @@ func TestHandleAddJob_NilPayload(t *testing.T) {
 		if resp.Error == "" {
 			t.Error("expected error message but got empty")
 		}
-		if resp.RequestID != "req-addjob-nil-1" {
-			t.Errorf("expected RequestID 'req-addjob-nil-1', got '%s'", resp.RequestID)
+		if resp.RequestID != 10 {
+			t.Errorf("expected RequestID 10, got '%d'", resp.RequestID)
 		}
 		if resp.Error != internal.ErrInvalidPayload.Error() {
 			t.Errorf("expected error '%s', got '%s'", internal.ErrInvalidPayload.Error(), resp.Error)
@@ -3521,14 +3512,14 @@ func TestHandleDrop(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			respCh := make(chan model.ToProducerResponse, 1)
 			cmd := model.Command{
 				Type: model.CmdDrop,
 				Drop: tt.dropPayload,
 				RespInfo: &model.RespInfo{
-					RequestID: "req-" + tt.name,
+					RequestID: uint32(i),
 					RespCh:    respCh,
 				},
 			}

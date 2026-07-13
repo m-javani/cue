@@ -85,7 +85,7 @@ func (h *CHandler) ensureChannel(ctx context.Context, topic string) (chan<- mode
 	case h.topologyCh <- TopicCommand{
 		Type:      TopicCommandSpawn,
 		Topic:     topic,
-		RequestID: fmt.Sprintf("%d", rand.IntN(1000)),
+		RequestID: rand.Uint32N(1000),
 		RespCh:    respCh,
 	}:
 	case <-ctx.Done():

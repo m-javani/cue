@@ -63,7 +63,7 @@ func TestTopicManager(t *testing.T) {
 		cmdCh <- TopicCommand{
 			Type:      TopicCommandSpawn,
 			Topic:     "test-topic",
-			RequestID: "req-1",
+			RequestID: 1,
 			RespCh:    respCh,
 		}
 
@@ -89,7 +89,7 @@ func TestTopicManager(t *testing.T) {
 		cmdCh <- TopicCommand{
 			Type:      TopicCommandSpawn,
 			Topic:     "test-topic",
-			RequestID: "req-2",
+			RequestID: 2,
 			RespCh:    respCh,
 		}
 
@@ -150,7 +150,7 @@ func TestTopicManager(t *testing.T) {
 		cmdCh <- TopicCommand{
 			Type:      TopicCommandKill,
 			Topic:     "test-topic",
-			RequestID: "req-3",
+			RequestID: 3,
 			RespCh:    respCh,
 		}
 
@@ -175,7 +175,7 @@ func TestTopicManager(t *testing.T) {
 		cmdCh <- TopicCommand{
 			Type:      TopicCommandKill,
 			Topic:     "non-existent",
-			RequestID: "req-4",
+			RequestID: 4,
 			RespCh:    respCh,
 		}
 
@@ -225,7 +225,7 @@ func TestTopicManager_UnknownCommand_RespChFull(t *testing.T) {
 
 		// Fill the response channel
 		respCh <- model.ToProducerResponse{
-			RequestID: "dummy",
+			RequestID: 0,
 			Status:    "success",
 		}
 
@@ -233,7 +233,7 @@ func TestTopicManager_UnknownCommand_RespChFull(t *testing.T) {
 		cmdCh <- TopicCommand{
 			Type:      TopicCommandType("unknown_full"),
 			Topic:     "test-topic",
-			RequestID: "req-full",
+			RequestID: 0,
 			RespCh:    respCh,
 		}
 

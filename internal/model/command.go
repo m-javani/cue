@@ -56,7 +56,7 @@ func (t CommandType) String() string {
 
 // ==== One struct: local use + serializable ====
 type RespInfo struct {
-	RequestID string `msgpack:"request_id"`
+	RequestID uint32 `msgpack:"request_id"`
 	RespCh    chan<- ToProducerResponse
 }
 

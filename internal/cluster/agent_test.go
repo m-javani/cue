@@ -903,7 +903,7 @@ func TestReplication(t *testing.T) {
 				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: "a-request-id",
+				RequestID: 1,
 				RespCh:    respCh,
 			},
 		}
@@ -1064,7 +1064,7 @@ func TestNewNodeCatchesUp(t *testing.T) {
 				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: fmt.Sprintf("job-%d", i),
+				RequestID: uint32(i),
 				RespCh:    respCh,
 			},
 		}
@@ -1127,7 +1127,7 @@ func TestNewNodeCatchesUp(t *testing.T) {
 			}},
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "a-request-id",
+			RequestID: 1,
 			RespCh:    respCh,
 		},
 	}
@@ -1197,7 +1197,7 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: "a-request-id",
+				RequestID: 1,
 				RespCh:    respCh,
 			},
 		}
@@ -1234,7 +1234,7 @@ func TestNodeCatchesUpAfterRestart(t *testing.T) {
 				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: "a-request-id",
+				RequestID: 1,
 				RespCh:    respCh,
 			},
 		}
@@ -1316,7 +1316,7 @@ func TestClusterMembershipChanges(t *testing.T) {
 				}},
 			},
 			RespInfo: &model.RespInfo{
-				RequestID: fmt.Sprintf("job-%d", i),
+				RequestID: uint32(i),
 				RespCh:    respCh,
 			},
 		}
@@ -1348,7 +1348,7 @@ func TestClusterMembershipChanges(t *testing.T) {
 			NodeID: node4Agent.GetNodeID(),
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "a-sample-id",
+			RequestID: 1,
 			RespCh:    addNodeRespCh,
 		},
 	}
@@ -1371,7 +1371,7 @@ func TestClusterMembershipChanges(t *testing.T) {
 			NodeID: node4Agent.GetNodeID(),
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: "a-sample-id",
+			RequestID: 1,
 			RespCh:    removeNodeRespCh,
 		},
 	}
@@ -1446,7 +1446,7 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 					}},
 				},
 				RespInfo: &model.RespInfo{
-					RequestID: "a-request-id",
+					RequestID: 1,
 					RespCh:    respCh,
 				},
 			}
@@ -1469,7 +1469,7 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 					JobIDs: []string{fmt.Sprintf("job-%d", i)},
 				},
 				RespInfo: &model.RespInfo{
-					RequestID: "a-request-id",
+					RequestID: 1,
 					RespCh:    respCh,
 				},
 			}
@@ -1495,7 +1495,7 @@ func TestSnapshotCompactionAndRestart(t *testing.T) {
 					}},
 				},
 				RespInfo: &model.RespInfo{
-					RequestID: "a-request-id",
+					RequestID: 1,
 					RespCh:    respCh,
 				},
 			}

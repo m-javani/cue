@@ -16,6 +16,7 @@ package state
 
 import (
 	"context"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -245,7 +246,7 @@ func (t *PartitionTester) AddJob(jobID string, data []byte) {
 			}},
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: jobID,
+			RequestID: rand.Uint32N(1000),
 			RespCh:    respCh,
 		},
 	}
@@ -277,7 +278,7 @@ func (t *PartitionTester) AddJobAsync(jobID string, data []byte) {
 			}},
 		},
 		RespInfo: &model.RespInfo{
-			RequestID: jobID,
+			RequestID: 1,
 			RespCh:    respCh,
 		},
 	}
