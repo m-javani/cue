@@ -275,18 +275,21 @@ func (p *Partition) handleAddJobs(cmd model.Command) {
 	}
 
 	// Send response
-	resp := model.ToProducerResponse{
-		RequestID: cmd.RespInfo.RequestID,
+	if cmd.RespInfo != nil {
+		resp := model.ToProducerResponse{
+			RequestID: cmd.RespInfo.RequestID,
+		}
+
+		if len(failures) == 0 {
+			resp.Status = model.ToProxyRespStatusSuccess
+		} else {
+			resp.Status = model.ToProxyRespStatusError
+			resp.Failures = failures
+		}
+
+		p.sendResponse(cmd, resp)
 	}
 
-	if len(failures) == 0 {
-		resp.Status = model.ToProxyRespStatusSuccess
-	} else {
-		resp.Status = model.ToProxyRespStatusError
-		resp.Failures = failures
-	}
-
-	p.sendResponse(cmd, resp)
 }
 
 // Helper methods

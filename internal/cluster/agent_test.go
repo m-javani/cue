@@ -50,6 +50,11 @@ func NewFakeHandler(logger *zap.Logger, cmdRouter *state.CommandRouter) state.Ha
 	}
 }
 
+func (h *FakeHandler) TopicExist(topic string) bool {
+	_, exist := h.cmdRouter.GetChannel(topic)
+	return exist
+}
+
 func (h *FakeHandler) ProcessCommand(ctx context.Context, topic string, cmd *model.Command, index uint64) error {
 	if cmd.RespInfo == nil || cmd.RespInfo.RespCh == nil {
 		return nil
@@ -322,7 +327,9 @@ func (tc *TestCluster) AddNode(
 		DLQMaxSizeBytes:      1024,
 	}
 
-	handler := NewFakeHandler(logger, nil)
+	router := state.NewCommandRouter()
+	router.Register("test-topic", make(chan model.Command))
+	handler := NewFakeHandler(logger, router)
 	ctx, cancel := context.WithCancel(context.Background())
 	var status atomic.Uint32
 	status.Store(model.NodeStatusUnavailable.ToUin32())
@@ -886,6 +893,39 @@ func TestReplication(t *testing.T) {
 	defer cancel()
 
 	t.Logf("Sending %d commands to leader %s...", numCommands, leaderID)
+
+	// check if cluster agent returns error when sending to a missing topic
+	respCh := make(chan model.ToProducerResponse, 1)
+	cmd := model.Command{
+		Type: model.CmdAddJobs,
+		AddJobs: &model.AddJobsPayload{
+			Topic: "not-exist-topic",
+			Jobs: []model.Job{{
+				ID:    "job-x",
+				Topic: "not-exist-topic",
+				Data:  fmt.Appendf(nil, "payload-1"),
+			}},
+		},
+		RespInfo: &model.RespInfo{
+			RequestID: 1,
+			RespCh:    respCh,
+		},
+	}
+	err = cl.Propose(ctx, cmd)
+	if err != nil {
+		t.Logf("Failed to propose topic check command %v", err)
+		return
+	}
+	select {
+	case respInfo := <-respCh:
+		if respInfo.Status != model.ToProxyRespStatusError {
+			t.Logf("should return error on sending jobs to a not-exist-topic")
+		}
+	case <-ctx.Done():
+		t.Logf("Topic not exist checkCommand timed out")
+	}
+
+	// send regular commands
 
 	var successCount atomic.Int32
 	successCount.Store(0)

@@ -126,6 +126,31 @@ func (a *ClusterAgent) processCommand(cmd model.Command) {
 			return
 		}
 
+		if a.IsLeader() {
+			topic := ""
+			switch cmd.Type {
+			case model.CmdAddJobs:
+				topic = cmd.AddJobs.Topic
+			case model.CmdDone:
+				topic = cmd.Done.Topic
+			case model.CmdDrop:
+				topic = cmd.Drop.Topic
+			default:
+			}
+			if !a.handler.TopicExist(topic) {
+				if cmd.RespInfo != nil && cmd.RespInfo.RespCh != nil {
+					res := model.ToProducerResponse{
+						RequestID: cmd.RespInfo.RequestID,
+						Status:    model.ToProxyRespStatusError,
+						Error:     "topic not found",
+						Failures:  []model.JobFailure{},
+					}
+					cmd.RespInfo.RespCh <- res
+				}
+				return
+			}
+		}
+
 		id := a.proposalID.Add(1)
 		cmd.ProposeID = id
 		a.muPndPr.Lock()
